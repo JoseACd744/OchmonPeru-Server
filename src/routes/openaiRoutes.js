@@ -1,0 +1,14 @@
+const express = require('express');
+const OpenAIController = require('../controllers/openaiController');
+
+const router = express.Router();
+const openAIController = new OpenAIController();
+
+// Definir las rutas para las funcionalidades de OpenAI
+router.post('/maguique_ia', openAIController.handleBaseIA.bind(openAIController));
+router.post('/maguique_ia_form', openAIController.handleFormData.bind(openAIController)); // Nueva ruta
+
+// Ruta de prueba para testing sin Kommo
+router.post('/test-chat', openAIController.handleTestChat.bind(openAIController));
+
+module.exports = router;

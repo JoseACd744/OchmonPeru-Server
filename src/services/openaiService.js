@@ -1,0 +1,1091 @@
+require('dotenv').config();
+const OpenAI = require('openai');
+const fetch = require('node-fetch');
+const { authenticate, readTokenFromDB } = require('./refreshTokenKommo'); // Importar authenticate y readTokenFromDB
+const { getKommoSessionFromDB } = require('./kommoSessionService');
+
+// Clase que encapsula la lógica para interactuar con la API de OpenAI
+class OpenAIService {
+  constructor() {
+    const apiKey = process.env.OPENAI_API_KEY;
+    this.openai = new OpenAI({ apiKey: apiKey });
+    // Map para almacenar contexto de conversaciones (temporal, en producción usar base de datos)
+    this.conversationContexts = new Map();
+  }
+
+  // Obtener el token desde la base de datos
+  async getToken() {
+    const domain = process.env.SUBDOMINIO;
+    const tokenData = await readTokenFromDB(domain);
+    return tokenData.access_token;
+  }
+
+  // Método helper para hacer fetch con retry automático si el token está vencido
+  async fetchWithTokenRetry(url, options, retryCount = 0) {
+    const MAX_RETRIES = 1;
+    
+    try {
+      const response = await fetch(url, options);
+      
+      // Si obtenemos un 401 (Unauthorized), el token podría estar vencido
+      if (response.status === 401 && retryCount < MAX_RETRIES) {
+        console.log('Token inválido (401), actualizando token...');
+        
+        // Refrescar el token
+        await authenticate();
+        
+        // Obtener el nuevo token
+        const newToken = await this.getToken();
+        
+        // Actualizar el header de autorización en las opciones
+        options.headers.authorization = 'Bearer ' + newToken;
+        
+        // Reintentar la solicitud con el nuevo token
+        console.log('Reintentando solicitud con token actualizado...');
+        return await this.fetchWithTokenRetry(url, options, retryCount + 1);
+      }
+      
+      return response;
+    } catch (error) {
+      console.error('Error en fetchWithTokenRetry:', error);
+      throw error;
+    }
+  }
+
+  async main(msg_client, conversationId, lead_id) {
+    try {
+      const promptId = process.env.PROMPT_ID_IDENTIFICAR;
+      
+      if (!promptId) {
+        console.error("PROMPT_ID_IDENTIFICAR no está configurado en las variables de entorno");
+        return "Error de configuración: falta PROMPT_ID_IDENTIFICAR en el archivo .env";
+      }
+      
+      // Con Responses API, creamos directamente la respuesta con el input
+      const lastMessage = await this.createResponse(promptId, msg_client, conversationId, lead_id);
+      return lastMessage;
+    } catch (error) {
+      console.error("Error en main:", error);
+      // Si hay cualquier error, transferir a un asesor (solo si lead_id existe)
+      if (lead_id) {
+        try {
+          await this.getInterest("ASESOR", lead_id);
+        } catch (fallbackError) {
+          console.error("Error en la transferencia a asesor:", fallbackError);
+        }
+      }
+      return "Lo siento, estoy teniendo problemas técnicos. " + (lead_id ? "Te estoy transfiriendo a un asesor humano que te atenderá a la brevedad." : "Por favor, revisa la configuración del servidor.");
+    }
+  }
+
+  // Crear una nueva conversación (genera un ID único)
+  async createdConversation() {
+    // Generar un ID único para la conversación
+    const conversationId = 'conv_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+    // Inicializar el contexto de la conversación
+    this.conversationContexts.set(conversationId, {
+      messages: [],
+      lastResponseId: null,
+      createdAt: new Date()
+    });
+    console.log('Nueva conversación creada:', conversationId);
+    return conversationId;
+  }
+
+  // Eliminar una conversación existente
+  async deletedConversation(conversation_id) {
+    if (this.conversationContexts.has(conversation_id)) {
+      this.conversationContexts.delete(conversation_id);
+      console.log('Conversación eliminada:', conversation_id);
+    }
+  }
+
+  // Obtener contexto de una conversación
+  getConversationContext(conversation_id) {
+    return this.conversationContexts.get(conversation_id) || null;
+  }
+
+  // Actualizar contexto de una conversación
+  updateConversationContext(conversation_id, updates) {
+    const context = this.conversationContexts.get(conversation_id);
+    if (context) {
+      Object.assign(context, updates);
+      this.conversationContexts.set(conversation_id, context);
+    }
+  }
+
+  // En Responses API, los mensajes se envían directamente como input en createResponse()
+  // Esta función se mantiene para compatibilidad pero ya no se usa
+    async addMessageToConversation(conversationId, msg_client) {
+      // En Responses API los mensajes se agregan automáticamente a la conversación
+      // cuando usamos el parámetro conversation en responses.create()
+      return { role: "user", content: msg_client };
+    }
+  
+  async createResponse(promptId, msg_client, conversationId, lead_id) {
+    try {
+      if (!promptId) {
+        throw new Error("Missing required parameter: 'prompt_id'");
+      }
+
+      // Validar que msg_client no esté vacío
+      if (!msg_client || typeof msg_client !== 'string' || msg_client.trim() === '') {
+        throw new Error("Missing or invalid required parameter: 'msg_client'");
+      }
+
+      // Obtener contexto de la conversación si existe
+      let context = conversationId ? this.getConversationContext(conversationId) : null;
+      let input = [];
+      let previousResponseId = null;
+
+      if (context && context.messages.length > 0) {
+        // Si hay contexto previo, usar previous_response_id
+        previousResponseId = context.lastResponseId;
+        input = [{ role: "user", content: msg_client.trim() }];
+      } else {
+        // Primera interacción o sin contexto
+        input = [{ role: "user", content: msg_client.trim() }];
+      }
+
+      // Crear la respuesta usando Responses API con el formato correcto
+      const requestParams = {
+        prompt: { 
+          id: promptId,
+          version: "4" // o especificar versión como "3"
+        },
+        input: input,
+        text: {
+          format: {
+            type: "text"
+          }
+        },
+        max_output_tokens: 2048,
+        store: true
+      };
+
+      // Agregar previous_response_id si existe
+      if (previousResponseId) {
+        requestParams.previous_response_id = previousResponseId;
+      }
+
+      console.log('Creando respuesta con Responses API...');
+      console.log('Input:', JSON.stringify(input));
+      const stream = await this.openai.responses.stream(requestParams);
+
+      // Variables para manejar el loop de tool calls
+      let currentResponse = null;
+      let needsToolHandling = false;
+      let toolCallItems = [];
+
+      for await (const event of stream) {
+        console.log('Evento recibido:', event.type); // Debug: mostrar tipo de evento
+        
+        // Guardar la respuesta completa cuando termine
+        // Intentar múltiples tipos de eventos
+        if (event.type === 'response.done' || event.type === 'done' || event.response) {
+          currentResponse = event.response || event;
+          console.log('Respuesta completa recibida:', JSON.stringify(currentResponse).substring(0, 200));
+          
+          // Buscar tool calls en los output items
+          if (currentResponse.output) {
+            for (const item of currentResponse.output) {
+              if (item.type === 'function_call') {
+                needsToolHandling = true;
+                toolCallItems.push(item);
+              }
+            }
+          }
+        }
+      }
+
+      // Si hay tool calls que manejar, procesarlos
+      if (needsToolHandling && toolCallItems.length > 0) {
+        const toolOutputItems = [];
+
+        for (const toolCall of toolCallItems) {
+          const args = JSON.parse(toolCall.arguments);
+          console.log("ToolCall detectado:", toolCall.name);
+          console.log("Argumentos procesados:", args);
+
+          let outputValue = null;
+
+          if (toolCall.name === 'unknow_message') {
+            const customer_message = args.customer_message;
+            const action_id = args.action_id;
+            console.log(`Mensaje del cliente: ${customer_message}`);
+            console.log(`ID de acción: ${action_id}`);
+            if (lead_id) {
+              outputValue = await this.postAppScriptAndKommo(action_id, customer_message, lead_id);
+            } else {
+              outputValue = { success: true, message: '[MODO PRUEBA] Mensaje procesado' };
+            }
+          } else if (toolCall.name === 'send_asesor') {
+            const send = args.send;
+            console.log(`Iniciando transferencia a asesor: ${send}`);
+            if (lead_id) {
+              outputValue = await this.getInterest("ASESOR", lead_id);
+            } else {
+              outputValue = { success: true, message: '[MODO PRUEBA] Transferencia a asesor simulada' };
+            }
+          } else if (toolCall.name === 'registrar_formulario_venta') {
+            const { nombre, tiene_punto_venta, ubicacion, ha_probado_productos, timestamp } = args;
+            console.log(`Procesando formulario de venta:`);
+            console.log(`  - Nombre: ${nombre}`);
+            console.log(`  - Tiene punto de venta: ${tiene_punto_venta}`);
+            console.log(`  - Ubicación: ${ubicacion}`);
+            console.log(`  - Ha probado productos: ${ha_probado_productos}`);
+            console.log(`  - Timestamp: ${timestamp}`);
+            
+            if (lead_id) {
+              outputValue = await this.processFormVenta({
+                nombre,
+                tiene_punto_venta,
+                ubicacion,
+                ha_probado_productos,
+                timestamp
+              }, lead_id);
+            } else {
+              outputValue = { 
+                success: true, 
+                message: '[MODO PRUEBA] Formulario de venta procesado',
+                data: { nombre, tiene_punto_venta, ubicacion, ha_probado_productos, timestamp }
+              };
+            }
+          } else if (toolCall.name === 'terminar_interaccion') {
+            const action_id = args.action_id
+            console.log(`Iniciando transferencia a asesor: ${send}`);
+            if (lead_id) {
+              outputValue = await this.notInterested(action_id, lead_id);
+            } else {
+              outputValue = { success: true, message: '[MODO PRUEBA] Transferencia a asesor simulada' };
+            }
+          } else if (toolCall.name === 'usuario_no_interesado') {
+            const action_id = args.action_id
+            console.log(`Marcando usuario como no interesado: ${action_id}`);
+            if (lead_id) {
+              outputValue = await this.notInterested(action_id, lead_id);
+            } else {
+              outputValue = { success: true, message: '[MODO PRUEBA] Usuario marcado como no interesado simulada' }; 
+            }
+          } else if (toolCall.name === 'proveedor_potencial') {
+            const action_id = args.action_id
+            console.log(`Marcando usuario como proveedor potencial: ${action_id}`);
+            if (lead_id) {
+              outputValue = await this.getProveedor(action_id, lead_id);
+            } else {
+              outputValue = { success: true, message: '[MODO PRUEBA] Usuario marcado como proveedor potencial simulada' };
+            }
+          } else if (toolCall.name === 'quiere_club') {
+            const action_id = args.action_id
+            console.log(`Marcando usuario como interesado en club: ${action_id}`);
+                        if (lead_id) {
+              outputValue = await this.clubRT(action_id, lead_id);
+            } else {
+              outputValue = { success: true, message: '[MODO PRUEBA] Usuario marcado como interesado en club simulada' };
+            }
+          } else if (toolCall.name === 'cliente_molesto') {
+            const action_id = args.action_id
+            console.log(`Marcando usuario como cliente molesto: ${action_id}`);
+
+            if (lead_id) {
+              outputValue = await this.ClienteMolesto(action_id, lead_id);
+            } else {
+              outputValue = { success: true, message: '[MODO PRUEBA] Usuario marcado como cliente molesto simulada' };
+            }
+          }
+
+          // Agregar el output del tool call
+          toolOutputItems.push({
+            type: 'function_call_output',
+            call_id: toolCall.call_id,
+            output: JSON.stringify(outputValue)
+          });
+        }
+
+        // Crear una nueva respuesta con los tool outputs
+        const followUpRequestParams = {
+          prompt: { id: promptId },
+          input: toolOutputItems,
+          previous_response_id: currentResponse.id,
+          store: true
+        };
+
+        const followUpResponse = await this.openai.responses.create(followUpRequestParams);
+
+        // Actualizar contexto de la conversación
+        if (conversationId) {
+          this.updateConversationContext(conversationId, {
+            lastResponseId: followUpResponse.id,
+            messages: [...(context?.messages || []), 
+              { role: 'user', content: msg_client },
+              { role: 'assistant', content: this.extractTextFromResponse(followUpResponse) }
+            ]
+          });
+        }
+
+        // Extraer y retornar el texto de la respuesta final
+        return this.extractTextFromResponse(followUpResponse);
+      }
+
+      // Si no hay tool calls, retornar el texto directamente
+      if (currentResponse) {
+        // Actualizar contexto de la conversación
+        if (conversationId) {
+          this.updateConversationContext(conversationId, {
+            lastResponseId: currentResponse.id,
+            messages: [...(context?.messages || []), 
+              { role: 'user', content: msg_client },
+              { role: 'assistant', content: this.extractTextFromResponse(currentResponse) }
+            ]
+          });
+        }
+
+        return this.extractTextFromResponse(currentResponse);
+      }
+
+      throw new Error("No se recibió respuesta del modelo");
+
+    } catch (error) {
+      console.error("Error en createResponse:", error);
+      // En caso de error, llamar a getInterest con "ASESOR" solo si hay lead_id
+      if (lead_id) {
+        try {
+          await this.getInterest("ASESOR", lead_id);
+          return "Lo siento, estoy teniendo problemas para procesar la solicitud. Te estoy transfiriendo a un asesor humano que te atenderá a la brevedad.";
+        } catch (fallbackError) {
+          console.error("Error en la transferencia a asesor:", fallbackError);
+          return "Lo siento, estoy teniendo problemas técnicos. Por favor, intenta nuevamente más tarde o contacta directamente a un asesor.";
+        }
+      } else {
+        // Modo prueba: retornar el error sin transferir
+        return `[MODO PRUEBA] Error: ${error.message}. Por favor verifica la configuración.`;
+      }
+    }
+  }
+
+  // Helper para extraer texto de una respuesta
+  extractTextFromResponse(response) {
+    for (const item of response.output) {
+      if (item.type === 'message' && item.content) {
+        for (const content of item.content) {
+          if (content.type === 'output_text') {
+            let text = content.text;
+            // Limpiar referencias
+            text = text.replace(/【\d+:\d+†[^】]+】/g, '');
+            // Verificar si el mensaje contiene Markdown
+            const markdownPattern = /(\*\*|_|~~|`|# |\* |- )/;
+            if (markdownPattern.test(text)) {
+              text = this.transformMarkdownToWhatsApp(text);
+            }
+            return text;
+          }
+        }
+      }
+    }
+    return response.output_text || "Lo siento, no pude generar una respuesta.";
+  }
+
+  // Fallback usando Chat Completions API (disponible en SDK actual)
+  async createResponseFallback(promptId, msg_client, conversationId, lead_id) {
+    try {
+      console.log("Usando Chat Completions API como fallback");
+      
+      // Obtener contexto de la conversación si existe
+      let context = conversationId ? this.getConversationContext(conversationId) : null;
+      let messages = [];
+
+      // Construir array de mensajes con el historial
+      if (context && context.messages.length > 0) {
+        messages = [...context.messages];
+      }
+
+      // Agregar el nuevo mensaje del usuario
+      messages.push({ role: "user", content: msg_client });
+
+      // Usar el modelo especificado o uno por defecto
+      const model = process.env.OPENAI_MODEL || "gpt-4o";
+
+      // Llamar a Chat Completions
+      const completion = await this.openai.chat.completions.create({
+        model: model,
+        messages: messages,
+        temperature: 0.2,
+      });
+
+      const responseText = completion.choices[0].message.content;
+
+      // Actualizar contexto de la conversación
+      if (conversationId) {
+        this.updateConversationContext(conversationId, {
+          lastResponseId: completion.id,
+          messages: [...messages, { role: 'assistant', content: responseText }]
+        });
+      }
+
+      // Limpiar y formatear la respuesta
+      let text = responseText.replace(/【\d+:\d+†[^】]+】/g, '');
+      const markdownPattern = /(\*\*|_|~~|`|# |\* |- )/;
+      if (markdownPattern.test(text)) {
+        text = this.transformMarkdownToWhatsApp(text);
+      }
+
+      return text;
+
+    } catch (error) {
+      console.error("Error en createResponseFallback:", error);
+      throw error;
+    }
+  }
+  
+
+  transformMarkdownToWhatsApp(markdownText) {
+    // Reemplazar negritas
+    let whatsappText = markdownText.replace(/\*\*(.*?)\*\*/g, '*$1*');
+    
+    // Reemplazar cursivas
+    whatsappText = whatsappText.replace(/_(.*?)_/g, '_$1_');
+    
+    // Reemplazar tachado
+    whatsappText = whatsappText.replace(/~~(.*?)~~/g, '~$1~');
+    
+    // Reemplazar monoespaciado
+    whatsappText = whatsappText.replace(/`(.*?)`/g, '```$1```');
+    
+    // Reemplazar títulos y subtítulos
+    whatsappText = whatsappText.replace(/^# (.*$)/gim, '*$1*');
+    whatsappText = whatsappText.replace(/^## (.*$)/gim, '*$1*');
+    whatsappText = whatsappText.replace(/^### (.*$)/gim, '*$1*');
+    
+    // Reemplazar viñetas
+    whatsappText = whatsappText.replace(/^\* (.*$)/gim, '- $1');
+    whatsappText = whatsappText.replace(/^- (.*$)/gim, '- $1');
+    
+    return whatsappText;
+  }
+
+   async ClienteMolesto(action_id, lead_id) {
+    // Asegurarse de que el token es válido antes de realizar la solicitud
+    await authenticate();
+  
+    console.log('action_id:', action_id); // Log para depuración
+    console.log('lead_id:', lead_id); // Log para depuración
+  
+    const token = await this.getToken();
+    const options = {
+      method: 'PATCH',
+      headers: {
+        accept: 'application/json',
+        'content-type': 'application/json',
+        authorization: 'Bearer ' + token
+      },
+      body: JSON.stringify([{
+        id: Number(lead_id),
+        custom_fields_values: [
+          { field_id: 4147726, values: [{ value: action_id }] }
+        ]
+      }])
+    };
+  
+    try {
+      const subdominio = process.env.SUBDOMINIO;
+      const response = await this.fetchWithTokenRetry(`https://${subdominio}.kommo.com/api/v4/leads`, options);
+      console.log('response status:', response.status); // Log para depuración
+      const responseBody = await response.json();
+      console.log('responseBody:', responseBody); // Log para depuración
+  
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      return { success: true, message: 'Se actualizó el lead' };
+    } catch (err) {
+      console.error("Error en la solicitud:", err);
+      return { success: false, message: 'Error al actualizar el lead' };
+    }
+  }
+
+    // Enviar el valor de la call fuction para cambiar a un asesor
+  async notInterested(action_id, lead_id) {
+    // Asegurarse de que el token es válido antes de realizar la solicitud
+    await authenticate();
+  
+    console.log('action_id:', action_id); // Log para depuración
+    console.log('lead_id:', lead_id); // Log para depuración
+  
+    const token = await this.getToken();
+    const options = {
+      method: 'PATCH',
+      headers: {
+        accept: 'application/json',
+        'content-type': 'application/json',
+        authorization: 'Bearer ' + token
+      },
+      body: JSON.stringify([{
+        id: Number(lead_id),
+        status_id: 101913259, // ID de estado "No interesado" (ajustar según tu configuración)
+        custom_fields_values: [
+          { field_id: 4147726, values: [{ value: action_id }] }
+        ]
+      }])
+    };
+  
+    try {
+      const subdominio = process.env.SUBDOMINIO;
+      const response = await this.fetchWithTokenRetry(`https://${subdominio}.kommo.com/api/v4/leads`, options);
+      console.log('response status:', response.status); // Log para depuración
+      const responseBody = await response.json();
+      console.log('responseBody:', responseBody); // Log para depuración
+  
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      return { success: true, message: 'Se actualizó el lead' };
+    } catch (err) {
+      console.error("Error en la solicitud:", err);
+      return { success: false, message: 'Error al actualizar el lead' };
+    }
+  }
+
+  async clubRT(action_id, lead_id) {
+    // Asegurarse de que el token es válido antes de realizar la solicitud
+    await authenticate();
+  
+    console.log('action_id:', action_id); // Log para depuración
+    console.log('lead_id:', lead_id); // Log para depuración
+  
+    const token = await this.getToken();
+    const options = {
+      method: 'PATCH',
+      headers: {
+        accept: 'application/json',
+        'content-type': 'application/json',
+        authorization: 'Bearer ' + token
+      },
+      body: JSON.stringify([{
+        id: Number(lead_id),
+        pipline_id: 13246811,
+        status_id: 102147059, // ID de estado "Proveedor potencial" (ajustar según tu configuración)
+        custom_fields_values: [
+          { field_id: 4147726, values: [{ value: action_id }] }
+        ]
+      }])
+    };
+  
+    try {
+      const subdominio = process.env.SUBDOMINIO;
+      const response = await this.fetchWithTokenRetry(`https://${subdominio}.kommo.com/api/v4/leads`, options);
+      console.log('response status:', response.status); // Log para depuración
+      const responseBody = await response.json();
+      console.log('responseBody:', responseBody); // Log para depuración
+  
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      return { success: true, message: 'Gracias por ser parte de esta bonita comunidad, estarás recibiendo algunos artículos exclusivos sobre el cuidado de tu piel y conocerás nuestras ofertas antes que nadie para que aproveches.' };
+    } catch (err) {
+      console.error("Error en la solicitud:", err);
+      return { success: false, message: 'Error al actualizar el lead' };
+    }
+  }
+
+    async getProveedor(action_id, lead_id) {
+    // Asegurarse de que el token es válido antes de realizar la solicitud
+    await authenticate();
+  
+    console.log('action_id:', action_id); // Log para depuración
+    console.log('lead_id:', lead_id); // Log para depuración
+  
+    const token = await this.getToken();
+    const options = {
+      method: 'PATCH',
+      headers: {
+        accept: 'application/json',
+        'content-type': 'application/json',
+        authorization: 'Bearer ' + token
+      },
+      body: JSON.stringify([{
+        id: Number(lead_id),
+        status_id: 99591631, // ID de estado "Proveedor potencial" (ajustar según tu configuración)
+        custom_fields_values: [
+          { field_id: 4147726, values: [{ value: action_id }] }
+        ]
+      }])
+    };
+  
+    try {
+      const subdominio = process.env.SUBDOMINIO;
+      const response = await this.fetchWithTokenRetry(`https://${subdominio}.kommo.com/api/v4/leads`, options);
+      console.log('response status:', response.status); // Log para depuración
+      const responseBody = await response.json();
+      console.log('responseBody:', responseBody); // Log para depuración
+  
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      return { success: true, message: 'Se actualizó el lead' };
+    } catch (err) {
+      console.error("Error en la solicitud:", err);
+      return { success: false, message: 'Error al actualizar el lead' };
+    }
+  }
+
+
+  // Enviar el valor de la call fuction para cambiar a un asesor
+  async getInterest(action_id, lead_id) {
+    // Asegurarse de que el token es válido antes de realizar la solicitud
+    await authenticate();
+  
+    console.log('action_id:', action_id); // Log para depuración
+    console.log('lead_id:', lead_id); // Log para depuración
+  
+    const token = await this.getToken();
+    const options = {
+      method: 'PATCH',
+      headers: {
+        accept: 'application/json',
+        'content-type': 'application/json',
+        authorization: 'Bearer ' + token
+      },
+      body: JSON.stringify([{
+        id: Number(lead_id),
+        custom_fields_values: [
+          { field_id: 4147726, values: [{ value: action_id }] }
+        ]
+      }])
+    };
+  
+    try {
+      const subdominio = process.env.SUBDOMINIO;
+      const response = await this.fetchWithTokenRetry(`https://${subdominio}.kommo.com/api/v4/leads`, options);
+      console.log('response status:', response.status); // Log para depuración
+      const responseBody = await response.json();
+      console.log('responseBody:', responseBody); // Log para depuración
+  
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      return { success: true, message: 'Se actualizó el lead' };
+    } catch (err) {
+      console.error("Error en la solicitud:", err);
+      return { success: false, message: 'Error al actualizar el lead' };
+    }
+  }
+
+  // Procesar formulario de venta
+  async processFormVenta(formData, lead_id) {
+    try {
+      await authenticate();
+
+      const { nombre, tiene_punto_venta, ubicacion, ha_probado_productos, timestamp, action_id } = formData;
+      
+      console.log('Procesando formulario de venta para lead:', lead_id);
+      
+      const token = await this.getToken();
+      
+      // Construir el cuerpo de la solicitud para actualizar campos personalizados
+      // Ajusta los field_id según tu configuración en Kommo
+      const customFieldsValues = [
+        {
+          field_id: 4147726, // Campo de action_id (siempre se incluye)
+          values: [{ value: "PROVEEDOR" }]
+        }
+      ];
+      
+      // Agregar campos según necesites mapearlos en Kommo
+      // Estos son ejemplos - debes reemplazarlos con los field_id correctos de tu cuenta
+      if (nombre) {
+        customFieldsValues.push({
+          field_id: 4203830, // Ajustar según tu configuración
+          values: [{ value: nombre }]
+        });
+      }
+      
+      if (tiene_punto_venta) {
+        customFieldsValues.push({
+          field_id: 4203832, // Ajustar según tu configuración
+          values: [{ value: tiene_punto_venta }]
+        });
+      }
+      
+      if (ubicacion) {
+        customFieldsValues.push({
+          field_id: 4203834, // Ajustar según tu configuración
+          values: [{ value: ubicacion }]
+        });
+      }
+      
+      if (ha_probado_productos) {
+        customFieldsValues.push({
+          field_id: 4203836, // Ajustar según tu configuración
+          values: [{ value: ha_probado_productos }]
+        });
+      }
+
+      const options = {
+        method: 'PATCH',
+        headers: {
+          accept: 'application/json',
+          'content-type': 'application/json',
+          authorization: 'Bearer ' + token
+        },
+        body: JSON.stringify([{
+          id: Number(lead_id),
+          custom_fields_values: customFieldsValues
+        }])
+      };
+
+      const subdominio = process.env.SUBDOMINIO;
+      const response = await this.fetchWithTokenRetry(`https://${subdominio}.kommo.com/api/v4/leads`, options);
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`Error al actualizar formulario de venta: ${response.status}, ${errorText}`);
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      
+      const responseBody = await response.json();
+      console.log('Formulario de venta procesado exitosamente:', responseBody);
+      
+      return { 
+        success: true, 
+        message: 'Formulario de venta procesado y lead actualizado',
+        data: formData
+      };
+    } catch (err) {
+      console.error("Error procesando formulario de venta:", err);
+      return { 
+        success: false, 
+        message: 'Error al procesar formulario de venta',
+        error: err.message
+      };
+    }
+  }
+  
+
+
+  async processRequestData(request) {
+    try {
+      console.log('request.body:', request.body); // Log para depuración del cuerpo de la solicitud
+  
+      const formData = request.body;
+      console.log('formData:', formData); // Log para depuración
+      const parsedData = {};
+      for (const key in formData) {
+        const value = Array.isArray(formData[key]) ? formData[key][0] : formData[key];
+        parsedData[key] = value;
+      }
+      console.log('parsedData:', parsedData); // Log para depuración
+  
+      const idLead = formData.leads.add[0].id;
+      console.log('idLead:', idLead); // Log para depuración
+      if (!idLead) {
+        throw new Error('idLead no encontrado en los datos del formulario');
+      }
+  
+      const token = await this.getToken();
+      console.log('Token:', token); // Log para depuración
+      const optionsGetLead = {
+        method: 'get',
+        headers: {
+          'Accept': 'application/json',
+          'Authorization': 'Bearer ' + token,
+          'Content-Type': 'application/json',
+        }
+      };
+  
+      const subdominio = process.env.SUBDOMINIO;
+      console.log('subdominio:', subdominio); // Log para depuración
+      const response_get = await this.fetchWithTokenRetry(`https://${subdominio}.kommo.com/api/v4/leads/${idLead}`, optionsGetLead);
+      console.log('response_get status:', response_get.status); // Log para depuración
+      const responseBody = await response_get.json();
+      console.log('responseBody:', responseBody); // Log para depuración
+  
+      if (!responseBody.custom_fields_values) {
+        throw new Error('custom_fields_values no encontrado en la respuesta');
+      }
+
+      // mensaje del cliente
+      const msj_client = responseBody.custom_fields_values.find((obj) => obj.field_id === 4147720);
+      console.log('msj_client:', msj_client); // Log para depuración
+      let msj_client_value = msj_client?.values?.[0]?.value;
+            
+      console.log('msj_client_value:', msj_client_value); // Log para depuración
+  
+      const conversation_id = responseBody.custom_fields_values.find((obj) => obj.field_id === 4147600);
+      console.log('conversation_id:', conversation_id); // Log para depuración
+      let conversation_id_value = conversation_id?.values?.[0]?.value || null;
+      console.log('conversation_id_value:', conversation_id_value); // Log para depuración
+      
+      // Crear una nueva conversación si no se proporciona una
+      if (!conversation_id_value) {
+        console.log('Creando una nueva conversación'); // Log para depuración
+        conversation_id_value = await this.createdConversation();
+        console.log('Nuevo conversation_id_value:', conversation_id_value); // Log para depuración
+      }
+  
+      // Llamar a las funciones correspondientes con los valores obtenidos
+      if (conversation_id_value) {
+        const promptId = process.env.PROMPT_ID_IDENTIFICAR;
+        console.log('Llamando a main con conversation_id_value y msj_client_value'); // Log para depuración
+        // Ya no necesitamos waitForActiveResponseToFinish en Responses API
+        console.log('Llamando a main con:', { conversation_id_value, msj_client_value });
+        const message = await this.main(msj_client_value, conversation_id_value, idLead);
+        console.log('Mensaje obtenido:', message); // Log para depuración
+  
+        // Actualizar el campo personalizado en Kommo con el mensaje obtenido
+        console.log('Actualizando el campo personalizado en Kommo'); // Log para depuración
+        console.log('Llamando a updateLeadCustomField con:', { idLead, message, conversation_id_value });
+        await this.updateLeadCustomField(idLead, message, conversation_id_value);
+        console.log('Campo personalizado actualizado'); // Log para depuración
+      }
+      return {
+        msj_client: msj_client_value,
+        lead_id: idLead,
+        conversation_id: conversation_id_value
+      };
+    } catch (error) {
+      console.error("Error procesando los datos de la solicitud:", error);
+      return null;
+    }
+  }
+
+
+  async updateLeadCustomField(lead_id, value, conversation_id) {
+    try {
+      await authenticate();
+    
+      if (!lead_id || !value || !conversation_id) {
+        throw new Error("Missing required parameters for updating lead custom field.");
+      }
+    
+      const token = await this.getToken();
+      const options = {
+        method: 'PATCH',
+        headers: {
+          accept: 'application/json',
+          'content-type': 'application/json',
+          authorization: 'Bearer ' + token
+        },
+        body: JSON.stringify([{
+          id: Number(lead_id),
+          custom_fields_values: [
+            // IA TEXT RESPONSE
+            { field_id: 4147600, values: [{ value: conversation_id }] }
+          ]
+        }])
+      };
+    
+      const subdominio = process.env.SUBDOMINIO;
+      const response = await this.fetchWithTokenRetry(`https://${subdominio}.kommo.com/api/v4/leads`, options);
+      await this.launchSalesbot(lead_id, token, subdominio, value);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`HTTP error! status: ${response.status}, response: ${errorText}`);
+        // Si hay un error HTTP, transferir a asesor
+        await this.getInterest("ASESOR", lead_id);
+        return { success: false, message: 'Error al actualizar el lead. Te transferimos a un asesor.' };
+      }
+      
+      return { success: true, message: 'Se actualizó el lead' };
+    } catch (err) {
+      console.error("Error en la solicitud:", err);
+      // En caso de cualquier error, transferir a asesor
+      await this.getInterest("ASESOR", lead_id);
+      throw err;
+    }
+  }
+
+  async launchSalesbot(idLead, token, subdominio, messageContent) {
+    const baseUrl = `https://${subdominio}.kommo.com`;
+    const headersApi = {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer ' + token,
+    };
+    let headersAjax = null;
+    let templateId = null;
+    let botId = null;
+
+    try {
+      // Paso 0: Obtener cookies de sesión via Puppeteer
+      const { sessionId, csrfToken } = await this.getKommoSessionCookies(subdominio);
+      headersAjax = {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + token,
+        'Cookie': `session_id=${sessionId}; csrf_token=${csrfToken}`,
+        'X-Requested-With': 'XMLHttpRequest',
+      };
+
+      // Paso 1: Crear chat template con el mensaje
+      templateId = await this.createChatTemplate(baseUrl, headersApi, messageContent);
+
+      // Paso 2: Crear salesbot vinculado al template
+      botId = await this.createSalesbotWithTemplate(baseUrl, headersAjax, templateId);
+
+      // Paso 3: Ejecutar el bot en el lead
+      await this.executeSalesbot(baseUrl, headersApi, botId, idLead);
+
+      console.log('Bot ejecutado correctamente en lead:', idLead);
+
+      // Pausa antes de limpiar
+      await new Promise(r => setTimeout(r, 2000));
+
+    } catch (error) {
+      console.error('Error en launchSalesbot:', error);
+    } finally {
+      // Limpieza: eliminar bot y template
+      if (botId && headersAjax) {
+        try {
+          await this.deleteSalesbotById(baseUrl, headersAjax, botId);
+        } catch (err) {
+          console.error('Error al eliminar el bot:', err.message);
+        }
+      }
+      if (templateId) {
+        try {
+          await this.deleteChatTemplate(baseUrl, headersApi, templateId);
+        } catch (err) {
+          console.error('Error al eliminar el template:', err.message);
+        }
+      }
+
+      // Ejecutar bot fijo 102014 después de limpiar
+      this.launchFixedSalesbot(idLead, token, subdominio);
+    }
+  }
+
+  launchFixedSalesbot(idLead, token, subdominio) {
+    const botLaunch = JSON.stringify([{ bot_id: 134886, entity_type: 2, entity_id: idLead }]);
+    fetch(`https://${subdominio}.kommo.com/api/v2/salesbot/run`, {
+      method: 'POST',
+      headers: {
+        'Accept': 'application/json',
+        'Authorization': 'Bearer ' + token,
+        'Content-Type': 'application/json',
+      },
+      body: botLaunch,
+    })
+      .then(response => {
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+        return response.json();
+      })
+      .then(data => console.log('Respuesta del bot fijo 102014:', data))
+      .catch(error => console.error('Error al ejecutar el bot fijo 102014:', error));
+  }
+
+  async getKommoSessionCookies(subdominio) {
+    return getKommoSessionFromDB(subdominio);
+  }
+
+  async createChatTemplate(baseUrl, headers, messageContent) {
+    console.log('Creando chat template...');
+    const res = await fetch(`${baseUrl}/api/v4/chats/templates`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify([{ name: 'rt_magique_bot_template', content: messageContent }]),
+    });
+
+    const json = await res.json();
+    if (!res.ok) throw new Error(`Error creando template: ${res.status} ${JSON.stringify(json)}`);
+
+    const template = json?._embedded?.chat_templates?.[0];
+    if (!template?.id) throw new Error('No se pudo obtener el ID del template creado');
+
+    console.log(`Template creado → ID: ${template.id}`);
+    return template.id;
+  }
+
+  async createSalesbotWithTemplate(baseUrl, headersAjax, templateId) {
+    console.log(`Creando salesbot con template_id: ${templateId}...`);
+    const botText = JSON.stringify({
+      "0": {
+        question: [{
+          handler: 'send_message',
+          params: {
+            type: 'external',
+            tag: '',
+            send_to_all_chat_sources: true,
+            recipient: { type: 'all_contacts', way_of_communication: 'over_all' },
+            is_in_starting_block: false,
+            template_id: templateId,
+            on_error: null,
+          },
+        }],
+      },
+      conversation: false,
+    });
+
+    const res = await fetch(`${baseUrl}/ajax/v2/salesbot`, {
+      method: 'POST',
+      headers: headersAjax,
+      body: JSON.stringify({
+        salesbot: [{
+          id: 0,
+          is_deleted: false,
+          name: 'RT Magique Bot (auto)',
+          type: 2,
+          is_active: true,
+          is_launched: false,
+          selected: true,
+          settings: { type_functionality: 0 },
+          text: botText,
+        }],
+      }),
+    });
+
+    const json = await res.json();
+    if (!res.ok) throw new Error(`Error creando salesbot: ${res.status} ${JSON.stringify(json)}`);
+
+    const bot = json?._embedded?.items?.[0];
+    if (!bot?.id) throw new Error('No se pudo obtener el ID del bot creado');
+
+    console.log(`Salesbot creado → ID: ${bot.id}`);
+    return bot.id;
+  }
+
+  async executeSalesbot(baseUrl, headers, botId, leadId) {
+    console.log(`Ejecutando bot ${botId} en lead ${leadId}...`);
+    const res = await fetch(`${baseUrl}/api/v4/bots/${botId}/run`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ entity_id: leadId, entity_type: 'leads' }),
+    });
+
+    const json = await res.json();
+    if (!res.ok) throw new Error(`Error ejecutando bot: ${res.status} ${JSON.stringify(json)}`);
+
+    console.log('Bot ejecutado:', json);
+    return json;
+  }
+
+  async deleteSalesbotById(baseUrl, headersAjax, botId) {
+    console.log(`Eliminando salesbot ID: ${botId}...`);
+    const res = await fetch(`${baseUrl}/ajax/v2/salesbot`, {
+      method: 'POST',
+      headers: headersAjax,
+      body: JSON.stringify({ salesbot: [{ id: botId, is_deleted: true }] }),
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Error eliminando bot: ${res.status} ${text}`);
+    }
+    console.log('Salesbot eliminado');
+  }
+
+  async deleteChatTemplate(baseUrl, headers, templateId) {
+    console.log(`Eliminando template ID: ${templateId}...`);
+    const res = await fetch(`${baseUrl}/api/v4/chats/templates/${templateId}`, {
+      method: 'DELETE',
+      headers,
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Error eliminando template: ${res.status} ${text}`);
+    }
+    console.log('Template eliminado');
+  }
+
+}
+
+module.exports = OpenAIService;
