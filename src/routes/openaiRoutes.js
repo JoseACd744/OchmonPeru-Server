@@ -5,8 +5,8 @@ const router = express.Router();
 const openAIController = new OpenAIController();
 
 // Definir las rutas para las funcionalidades de OpenAI
-router.post('/maguique_ia', openAIController.handleBaseIA.bind(openAIController));
-router.post('/maguique_ia_form', openAIController.handleFormData.bind(openAIController)); // Nueva ruta
+router.post('/ochmon_ia', openAIController.handleBaseIA.bind(openAIController));
+router.post('/ochmon_ia_form', openAIController.handleFormData.bind(openAIController)); // Nueva ruta
 
 // Ruta de prueba para testing sin Kommo
 router.post('/test-chat', openAIController.handleTestChat.bind(openAIController));

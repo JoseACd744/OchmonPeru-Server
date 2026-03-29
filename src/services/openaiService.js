@@ -219,80 +219,7 @@ class OpenAIService {
             } else {
               outputValue = { success: true, message: '[MODO PRUEBA] Mensaje procesado' };
             }
-          } else if (toolCall.name === 'send_asesor') {
-            const send = args.send;
-            console.log(`Iniciando transferencia a asesor: ${send}`);
-            if (lead_id) {
-              outputValue = await this.getInterest("ASESOR", lead_id);
-            } else {
-              outputValue = { success: true, message: '[MODO PRUEBA] Transferencia a asesor simulada' };
-            }
-          } else if (toolCall.name === 'registrar_formulario_venta') {
-            const { nombre, tiene_punto_venta, ubicacion, ha_probado_productos, timestamp } = args;
-            console.log(`Procesando formulario de venta:`);
-            console.log(`  - Nombre: ${nombre}`);
-            console.log(`  - Tiene punto de venta: ${tiene_punto_venta}`);
-            console.log(`  - Ubicación: ${ubicacion}`);
-            console.log(`  - Ha probado productos: ${ha_probado_productos}`);
-            console.log(`  - Timestamp: ${timestamp}`);
-            
-            if (lead_id) {
-              outputValue = await this.processFormVenta({
-                nombre,
-                tiene_punto_venta,
-                ubicacion,
-                ha_probado_productos,
-                timestamp
-              }, lead_id);
-            } else {
-              outputValue = { 
-                success: true, 
-                message: '[MODO PRUEBA] Formulario de venta procesado',
-                data: { nombre, tiene_punto_venta, ubicacion, ha_probado_productos, timestamp }
-              };
-            }
-          } else if (toolCall.name === 'terminar_interaccion') {
-            const action_id = args.action_id
-            console.log(`Iniciando transferencia a asesor: ${send}`);
-            if (lead_id) {
-              outputValue = await this.notInterested(action_id, lead_id);
-            } else {
-              outputValue = { success: true, message: '[MODO PRUEBA] Transferencia a asesor simulada' };
-            }
-          } else if (toolCall.name === 'usuario_no_interesado') {
-            const action_id = args.action_id
-            console.log(`Marcando usuario como no interesado: ${action_id}`);
-            if (lead_id) {
-              outputValue = await this.notInterested(action_id, lead_id);
-            } else {
-              outputValue = { success: true, message: '[MODO PRUEBA] Usuario marcado como no interesado simulada' }; 
-            }
-          } else if (toolCall.name === 'proveedor_potencial') {
-            const action_id = args.action_id
-            console.log(`Marcando usuario como proveedor potencial: ${action_id}`);
-            if (lead_id) {
-              outputValue = await this.getProveedor(action_id, lead_id);
-            } else {
-              outputValue = { success: true, message: '[MODO PRUEBA] Usuario marcado como proveedor potencial simulada' };
-            }
-          } else if (toolCall.name === 'quiere_club') {
-            const action_id = args.action_id
-            console.log(`Marcando usuario como interesado en club: ${action_id}`);
-                        if (lead_id) {
-              outputValue = await this.clubRT(action_id, lead_id);
-            } else {
-              outputValue = { success: true, message: '[MODO PRUEBA] Usuario marcado como interesado en club simulada' };
-            }
-          } else if (toolCall.name === 'cliente_molesto') {
-            const action_id = args.action_id
-            console.log(`Marcando usuario como cliente molesto: ${action_id}`);
-
-            if (lead_id) {
-              outputValue = await this.ClienteMolesto(action_id, lead_id);
-            } else {
-              outputValue = { success: true, message: '[MODO PRUEBA] Usuario marcado como cliente molesto simulada' };
-            }
-          }
+          } 
 
           // Agregar el output del tool call
           toolOutputItems.push({
@@ -463,172 +390,6 @@ class OpenAIService {
     return whatsappText;
   }
 
-   async ClienteMolesto(action_id, lead_id) {
-    // Asegurarse de que el token es válido antes de realizar la solicitud
-    await authenticate();
-  
-    console.log('action_id:', action_id); // Log para depuración
-    console.log('lead_id:', lead_id); // Log para depuración
-  
-    const token = await this.getToken();
-    const options = {
-      method: 'PATCH',
-      headers: {
-        accept: 'application/json',
-        'content-type': 'application/json',
-        authorization: 'Bearer ' + token
-      },
-      body: JSON.stringify([{
-        id: Number(lead_id),
-        custom_fields_values: [
-          { field_id: 4147726, values: [{ value: action_id }] }
-        ]
-      }])
-    };
-  
-    try {
-      const subdominio = process.env.SUBDOMINIO;
-      const response = await this.fetchWithTokenRetry(`https://${subdominio}.kommo.com/api/v4/leads`, options);
-      console.log('response status:', response.status); // Log para depuración
-      const responseBody = await response.json();
-      console.log('responseBody:', responseBody); // Log para depuración
-  
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-      return { success: true, message: 'Se actualizó el lead' };
-    } catch (err) {
-      console.error("Error en la solicitud:", err);
-      return { success: false, message: 'Error al actualizar el lead' };
-    }
-  }
-
-    // Enviar el valor de la call fuction para cambiar a un asesor
-  async notInterested(action_id, lead_id) {
-    // Asegurarse de que el token es válido antes de realizar la solicitud
-    await authenticate();
-  
-    console.log('action_id:', action_id); // Log para depuración
-    console.log('lead_id:', lead_id); // Log para depuración
-  
-    const token = await this.getToken();
-    const options = {
-      method: 'PATCH',
-      headers: {
-        accept: 'application/json',
-        'content-type': 'application/json',
-        authorization: 'Bearer ' + token
-      },
-      body: JSON.stringify([{
-        id: Number(lead_id),
-        status_id: 101913259, // ID de estado "No interesado" (ajustar según tu configuración)
-        custom_fields_values: [
-          { field_id: 4147726, values: [{ value: action_id }] }
-        ]
-      }])
-    };
-  
-    try {
-      const subdominio = process.env.SUBDOMINIO;
-      const response = await this.fetchWithTokenRetry(`https://${subdominio}.kommo.com/api/v4/leads`, options);
-      console.log('response status:', response.status); // Log para depuración
-      const responseBody = await response.json();
-      console.log('responseBody:', responseBody); // Log para depuración
-  
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-      return { success: true, message: 'Se actualizó el lead' };
-    } catch (err) {
-      console.error("Error en la solicitud:", err);
-      return { success: false, message: 'Error al actualizar el lead' };
-    }
-  }
-
-  async clubRT(action_id, lead_id) {
-    // Asegurarse de que el token es válido antes de realizar la solicitud
-    await authenticate();
-  
-    console.log('action_id:', action_id); // Log para depuración
-    console.log('lead_id:', lead_id); // Log para depuración
-  
-    const token = await this.getToken();
-    const options = {
-      method: 'PATCH',
-      headers: {
-        accept: 'application/json',
-        'content-type': 'application/json',
-        authorization: 'Bearer ' + token
-      },
-      body: JSON.stringify([{
-        id: Number(lead_id),
-        pipline_id: 13246811,
-        status_id: 102147059, // ID de estado "Proveedor potencial" (ajustar según tu configuración)
-        custom_fields_values: [
-          { field_id: 4147726, values: [{ value: action_id }] }
-        ]
-      }])
-    };
-  
-    try {
-      const subdominio = process.env.SUBDOMINIO;
-      const response = await this.fetchWithTokenRetry(`https://${subdominio}.kommo.com/api/v4/leads`, options);
-      console.log('response status:', response.status); // Log para depuración
-      const responseBody = await response.json();
-      console.log('responseBody:', responseBody); // Log para depuración
-  
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-      return { success: true, message: 'Gracias por ser parte de esta bonita comunidad, estarás recibiendo algunos artículos exclusivos sobre el cuidado de tu piel y conocerás nuestras ofertas antes que nadie para que aproveches.' };
-    } catch (err) {
-      console.error("Error en la solicitud:", err);
-      return { success: false, message: 'Error al actualizar el lead' };
-    }
-  }
-
-    async getProveedor(action_id, lead_id) {
-    // Asegurarse de que el token es válido antes de realizar la solicitud
-    await authenticate();
-  
-    console.log('action_id:', action_id); // Log para depuración
-    console.log('lead_id:', lead_id); // Log para depuración
-  
-    const token = await this.getToken();
-    const options = {
-      method: 'PATCH',
-      headers: {
-        accept: 'application/json',
-        'content-type': 'application/json',
-        authorization: 'Bearer ' + token
-      },
-      body: JSON.stringify([{
-        id: Number(lead_id),
-        status_id: 99591631, // ID de estado "Proveedor potencial" (ajustar según tu configuración)
-        custom_fields_values: [
-          { field_id: 4147726, values: [{ value: action_id }] }
-        ]
-      }])
-    };
-  
-    try {
-      const subdominio = process.env.SUBDOMINIO;
-      const response = await this.fetchWithTokenRetry(`https://${subdominio}.kommo.com/api/v4/leads`, options);
-      console.log('response status:', response.status); // Log para depuración
-      const responseBody = await response.json();
-      console.log('responseBody:', responseBody); // Log para depuración
-  
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-      return { success: true, message: 'Se actualizó el lead' };
-    } catch (err) {
-      console.error("Error en la solicitud:", err);
-      return { success: false, message: 'Error al actualizar el lead' };
-    }
-  }
-
-
   // Enviar el valor de la call fuction para cambiar a un asesor
   async getInterest(action_id, lead_id) {
     // Asegurarse de que el token es válido antes de realizar la solicitud
@@ -669,97 +430,6 @@ class OpenAIService {
       return { success: false, message: 'Error al actualizar el lead' };
     }
   }
-
-  // Procesar formulario de venta
-  async processFormVenta(formData, lead_id) {
-    try {
-      await authenticate();
-
-      const { nombre, tiene_punto_venta, ubicacion, ha_probado_productos, timestamp, action_id } = formData;
-      
-      console.log('Procesando formulario de venta para lead:', lead_id);
-      
-      const token = await this.getToken();
-      
-      // Construir el cuerpo de la solicitud para actualizar campos personalizados
-      // Ajusta los field_id según tu configuración en Kommo
-      const customFieldsValues = [
-        {
-          field_id: 4147726, // Campo de action_id (siempre se incluye)
-          values: [{ value: "PROVEEDOR" }]
-        }
-      ];
-      
-      // Agregar campos según necesites mapearlos en Kommo
-      // Estos son ejemplos - debes reemplazarlos con los field_id correctos de tu cuenta
-      if (nombre) {
-        customFieldsValues.push({
-          field_id: 4203830, // Ajustar según tu configuración
-          values: [{ value: nombre }]
-        });
-      }
-      
-      if (tiene_punto_venta) {
-        customFieldsValues.push({
-          field_id: 4203832, // Ajustar según tu configuración
-          values: [{ value: tiene_punto_venta }]
-        });
-      }
-      
-      if (ubicacion) {
-        customFieldsValues.push({
-          field_id: 4203834, // Ajustar según tu configuración
-          values: [{ value: ubicacion }]
-        });
-      }
-      
-      if (ha_probado_productos) {
-        customFieldsValues.push({
-          field_id: 4203836, // Ajustar según tu configuración
-          values: [{ value: ha_probado_productos }]
-        });
-      }
-
-      const options = {
-        method: 'PATCH',
-        headers: {
-          accept: 'application/json',
-          'content-type': 'application/json',
-          authorization: 'Bearer ' + token
-        },
-        body: JSON.stringify([{
-          id: Number(lead_id),
-          custom_fields_values: customFieldsValues
-        }])
-      };
-
-      const subdominio = process.env.SUBDOMINIO;
-      const response = await this.fetchWithTokenRetry(`https://${subdominio}.kommo.com/api/v4/leads`, options);
-      
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error(`Error al actualizar formulario de venta: ${response.status}, ${errorText}`);
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-      
-      const responseBody = await response.json();
-      console.log('Formulario de venta procesado exitosamente:', responseBody);
-      
-      return { 
-        success: true, 
-        message: 'Formulario de venta procesado y lead actualizado',
-        data: formData
-      };
-    } catch (err) {
-      console.error("Error procesando formulario de venta:", err);
-      return { 
-        success: false, 
-        message: 'Error al procesar formulario de venta',
-        error: err.message
-      };
-    }
-  }
-  
 
 
   async processRequestData(request) {
@@ -804,13 +474,13 @@ class OpenAIService {
       }
 
       // mensaje del cliente
-      const msj_client = responseBody.custom_fields_values.find((obj) => obj.field_id === 4147720);
+      const msj_client = responseBody.custom_fields_values.find((obj) => obj.field_id === 1761300);
       console.log('msj_client:', msj_client); // Log para depuración
       let msj_client_value = msj_client?.values?.[0]?.value;
             
       console.log('msj_client_value:', msj_client_value); // Log para depuración
   
-      const conversation_id = responseBody.custom_fields_values.find((obj) => obj.field_id === 4147600);
+      const conversation_id = responseBody.custom_fields_values.find((obj) => obj.field_id === 1761294);
       console.log('conversation_id:', conversation_id); // Log para depuración
       let conversation_id_value = conversation_id?.values?.[0]?.value || null;
       console.log('conversation_id_value:', conversation_id_value); // Log para depuración
@@ -869,7 +539,7 @@ class OpenAIService {
           id: Number(lead_id),
           custom_fields_values: [
             // IA TEXT RESPONSE
-            { field_id: 4147600, values: [{ value: conversation_id }] }
+            { field_id: 1761294, values: [{ value: conversation_id }] }
           ]
         }])
       };
@@ -954,7 +624,7 @@ class OpenAIService {
   }
 
   launchFixedSalesbot(idLead, token, subdominio) {
-    const botLaunch = JSON.stringify([{ bot_id: 134886, entity_type: 2, entity_id: idLead }]);
+    const botLaunch = JSON.stringify([{ bot_id: 61564, entity_type: 2, entity_id: idLead }]);
     fetch(`https://${subdominio}.kommo.com/api/v2/salesbot/run`, {
       method: 'POST',
       headers: {

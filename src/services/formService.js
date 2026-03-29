@@ -196,7 +196,7 @@ class OpenAIService {
       }
   
       // mensaje del cliente
-      const msj_client = responseBody.custom_fields_values.find((obj) => obj.field_id === 4147720);
+      const msj_client = responseBody.custom_fields_values.find((obj) => obj.field_id === 1761300);
       console.log('msj_client:', msj_client); // Log para depuración
       let msj_client_value = msj_client?.values?.[0]?.value || "Hola"; // Establecer "Hola" si es indefinido o vacío
       console.log('msj_client_value:', msj_client_value); // Log para depuración
@@ -204,7 +204,7 @@ class OpenAIService {
         throw new Error('msj_client_value no encontrado en los custom fields');
       }
   
-      const thread_id = responseBody.custom_fields_values.find((obj) => obj.field_id === 4147600);
+      const thread_id = responseBody.custom_fields_values.find((obj) => obj.field_id === 1761294);
       console.log('thread_id:', thread_id); // Log para depuración
       let thread_id_value = thread_id?.values?.[0]?.value || null; // Cambiar const a let
       console.log('thread_id_value:', thread_id_value); // Log para depuración
@@ -298,7 +298,7 @@ class OpenAIService {
         id: Number(lead_id),
         custom_fields_values: [
           { field_id: 1994931, values: [{ value: value }] },
-          { field_id: 4147600, values: [{ value: thread_id }] } // Añadir el thread_id aquí
+          { field_id: 1761294, values: [{ value: thread_id }] } // Añadir el thread_id aquí
         ]
       }])
     };

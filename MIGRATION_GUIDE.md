@@ -54,7 +54,7 @@ PROMPT_ID_AUXILIAR=prompt_tu_id_auxiliar_aqui
 
 ### 3. Actualizar el campo personalizado en Kommo (Opcional pero recomendado)
 
-El campo personalizado con `field_id: 4147600` ahora almacena `conversation_id` en lugar de `thread_id`. Aunque funciona igual, puedes renombrar el campo en Kommo para mayor claridad:
+El campo personalizado con `field_id: 1761294` ahora almacena `conversation_id` en lugar de `thread_id`. Aunque funciona igual, puedes renombrar el campo en Kommo para mayor claridad:
 
 - **Antes**: "Thread ID"
 - **Ahora**: "Conversation ID"
@@ -107,7 +107,7 @@ El campo personalizado con `field_id: 4147600` ahora almacena `conversation_id` 
    - Si necesitas deshabilitar el almacenamiento, usa `store: false`
 
 2. **El campo en Kommo no necesita cambios estructurales**
-   - El campo con `field_id: 4147600` seguirá funcionando
+   - El campo con `field_id: 1761294` seguirá funcionando
    - Solo cambia el tipo de ID que almacena (conversation_id vs thread_id)
 
 3. **Compatibilidad hacia atrás**
