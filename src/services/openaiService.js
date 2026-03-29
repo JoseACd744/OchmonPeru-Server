@@ -729,10 +729,10 @@ class OpenAIService {
 
   async deleteSalesbotById(baseUrl, headersAjax, botId) {
     console.log(`Eliminando salesbot ID: ${botId}...`);
-    const res = await fetch(`${baseUrl}/ajax/v2/salesbot`, {
-      method: 'POST',
+    const res = await fetch(`${baseUrl}/ajax/v2/salesbot/`, {
+      method: 'DELETE',
       headers: headersAjax,
-      body: JSON.stringify({ salesbot: [{ id: botId, is_deleted: true }] }),
+      body: JSON.stringify([botId]),
     });
 
     if (!res.ok) {
