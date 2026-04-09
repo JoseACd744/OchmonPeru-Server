@@ -34,6 +34,10 @@ async function refreshKommoSession(subdominio) {
     ]);
 
     const cookies = await page.cookies();
+    const cookieHeader = cookies
+      .filter(c => c && c.name && typeof c.value !== 'undefined')
+      .map(c => `${c.name}=${c.value}`)
+      .join('; ');
     const sessionId = cookies.find(c => c.name === 'session_id')?.value;
     const csrfToken = cookies.find(c => c.name === 'csrf_token')?.value;
 
@@ -50,7 +54,7 @@ async function refreshKommoSession(subdominio) {
     });
 
     console.log(`[KommoSession] Cookies guardadas en DB → session_id: ${sessionId.slice(0, 8)}...`);
-    return { sessionId, csrfToken };
+    return { sessionId, csrfToken, cookieHeader };
   } finally {
     await browser.close();
   }

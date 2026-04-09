@@ -209,9 +209,7 @@ class OpenAIService {
       let needsToolHandling = false;
       let toolCallItems = [];
 
-      for await (const event of stream) {
-        console.log('Evento recibido:', event.type); // Debug: mostrar tipo de evento
-        
+      for await (const event of stream) {        
         // Guardar la respuesta completa cuando termine
         // Intentar múltiples tipos de eventos
         if (event.type === 'response.done' || event.type === 'done' || event.response) {
@@ -606,30 +604,36 @@ class OpenAIService {
     let headersAjax = null;
     let templateId = null;
     let botId = null;
-    let retriedAfterSessionRefresh = false;
+    const MAX_CREATE_BOT_ATTEMPTS = 2;
 
     try {
-      // Paso 0: Obtener cookies de sesión via Puppeteer
-      const { sessionId, csrfToken } = await this.getKommoSessionCookies(subdominio);
-      headersAjax = this.buildKommoAjaxHeaders(sessionId, csrfToken);
+      // Paso 0: Obtener cookies de sesión (cache o refresh)
+      const { sessionId, csrfToken, cookieHeader } = await this.getKommoSessionCookies(subdominio);
+      headersAjax = this.buildKommoAjaxHeaders(baseUrl, token, sessionId, csrfToken, cookieHeader);
 
       // Paso 1: Crear chat template con el mensaje
       templateId = await this.createChatTemplate(baseUrl, headersApi, messageContent);
 
-      // Paso 2: Crear salesbot vinculado al template
-      try {
-        botId = await this.createSalesbotWithTemplate(baseUrl, headersAjax, templateId);
-      } catch (error) {
-        const isForbidden = error?.message?.includes('Error creando salesbot: 403');
-        if (!retriedAfterSessionRefresh && isForbidden) {
-          retriedAfterSessionRefresh = true;
-          console.warn('[KommoSession] 403 al crear salesbot. Renovando sesión y reintentando una vez...');
-
-          const { sessionId, csrfToken } = await refreshKommoSession(subdominio);
-          headersAjax = this.buildKommoAjaxHeaders(sessionId, csrfToken);
+      // Paso 2: Crear salesbot vinculado al template (con un retry de sesión)
+      for (let attempt = 1; attempt <= MAX_CREATE_BOT_ATTEMPTS; attempt++) {
+        try {
           botId = await this.createSalesbotWithTemplate(baseUrl, headersAjax, templateId);
-        } else {
-          throw error;
+          break;
+        } catch (error) {
+          const canRetry = attempt < MAX_CREATE_BOT_ATTEMPTS && this.shouldRetrySalesbotCreation(error);
+          if (!canRetry) {
+            throw error;
+          }
+
+          console.warn('[KommoSession] Error de autenticación en /ajax/v2/salesbot. Renovando sesión y reintentando...');
+          const refreshed = await this.getKommoSessionCookies(subdominio, true);
+          headersAjax = this.buildKommoAjaxHeaders(
+            baseUrl,
+            token,
+            refreshed.sessionId,
+            refreshed.csrfToken,
+            refreshed.cookieHeader
+          );
         }
       }
 
@@ -681,22 +685,40 @@ class OpenAIService {
       .catch(error => console.error('Error al ejecutar el bot fijo 102014:', error));
   }
 
-  async getKommoSessionCookies(subdominio) {
-    return getKommoSessionFromDB(subdominio);
+  async getKommoSessionCookies(subdominio, forceRefresh = false) {
+    if (forceRefresh) {
+      return refreshKommoSession(subdominio);
+    }
+
+    try {
+      return await getKommoSessionFromDB(subdominio);
+    } catch (_dbError) {
+      return refreshKommoSession(subdominio);
+    }
   }
 
-  buildKommoAjaxHeaders(sessionId, csrfToken) {
-    const subdominio = process.env.SUBDOMINIO;
-    const origin = `https://${subdominio}.kommo.com`;
+  buildKommoAjaxHeaders(baseUrl, token, sessionId, csrfToken, cookieHeader) {
     return {
-      'Accept': 'application/json, text/plain, */*',
+      'Accept': 'application/json',
       'Content-Type': 'application/json',
-      'Cookie': `session_id=${sessionId}; csrf_token=${csrfToken}`,
-      'Origin': origin,
-      'Referer': `${origin}/`,
-      'X-CSRF-Token': csrfToken,
+      'Authorization': 'Bearer ' + token,
+      'Cookie': cookieHeader || `session_id=${sessionId}; csrf_token=${csrfToken}`,
+      'Origin': baseUrl,
+      'Referer': `${baseUrl}/`,
+      'X-CSRF-TOKEN': csrfToken,
       'X-Requested-With': 'XMLHttpRequest',
     };
+  }
+
+  shouldRetrySalesbotCreation(error) {
+    return Boolean(
+      error && (
+        error.code === 'KOMMO_AJAX_NON_JSON' ||
+        error.code === 'KOMMO_AJAX_AUTH_HTML' ||
+        error.message?.includes('Error creando salesbot: 401') ||
+        error.message?.includes('Error creando salesbot: 403')
+      )
+    );
   }
 
   async createChatTemplate(baseUrl, headers, messageContent) {
@@ -754,7 +776,29 @@ class OpenAIService {
       }),
     });
 
-    const json = await this.parseJsonResponse(res, 'Error creando salesbot');
+    const raw = await res.text();
+    let json = null;
+
+    try {
+      json = raw ? JSON.parse(raw) : null;
+    } catch (_parseError) {
+      const contentType = res.headers.get('content-type') || 'desconocido';
+      const bodyPreview = raw ? raw.substring(0, 250).replace(/\s+/g, ' ').trim() : '[vacio]';
+
+      const nonJsonError = new Error(
+        `Respuesta no JSON al crear salesbot (${res.status}, content-type: ${contentType}). ` +
+        `Vista previa: ${bodyPreview}`
+      );
+      nonJsonError.code = 'KOMMO_AJAX_NON_JSON';
+      if (/text\/html|<!doctype|<html|login|auth|csrf/i.test(`${contentType} ${bodyPreview}`)) {
+        nonJsonError.code = 'KOMMO_AJAX_AUTH_HTML';
+      }
+      throw nonJsonError;
+    }
+
+    if (!res.ok) {
+      throw new Error(`Error creando salesbot: ${res.status} ${JSON.stringify(json)}`);
+    }
 
     const bot = json?._embedded?.items?.[0];
     if (!bot?.id) throw new Error('No se pudo obtener el ID del bot creado');
