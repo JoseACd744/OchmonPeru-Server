@@ -2,7 +2,7 @@ require('dotenv').config();
 const OpenAI = require('openai');
 const fetch = require('node-fetch');
 const { authenticate, readTokenFromDB } = require('./refreshTokenKommo'); // Importar authenticate y readTokenFromDB
-const { getKommoSessionFromDB } = require('./kommoSessionService');
+const { getKommoSessionFromDB, refreshKommoSession } = require('./kommoSessionService');
 
 // Clase que encapsula la lógica para interactuar con la API de OpenAI
 class OpenAIService {
@@ -606,24 +606,32 @@ class OpenAIService {
     let headersAjax = null;
     let templateId = null;
     let botId = null;
+    let retriedAfterSessionRefresh = false;
 
     try {
       // Paso 0: Obtener cookies de sesión via Puppeteer
       const { sessionId, csrfToken } = await this.getKommoSessionCookies(subdominio);
-      headersAjax = {
-        'Accept': 'application/json, text/plain, */*',
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + token,
-        'Cookie': `session_id=${sessionId}; csrf_token=${csrfToken}`,
-        'X-CSRF-Token': csrfToken,
-        'X-Requested-With': 'XMLHttpRequest',
-      };
+      headersAjax = this.buildKommoAjaxHeaders(sessionId, csrfToken);
 
       // Paso 1: Crear chat template con el mensaje
       templateId = await this.createChatTemplate(baseUrl, headersApi, messageContent);
 
       // Paso 2: Crear salesbot vinculado al template
-      botId = await this.createSalesbotWithTemplate(baseUrl, headersAjax, templateId);
+      try {
+        botId = await this.createSalesbotWithTemplate(baseUrl, headersAjax, templateId);
+      } catch (error) {
+        const isForbidden = error?.message?.includes('Error creando salesbot: 403');
+        if (!retriedAfterSessionRefresh && isForbidden) {
+          retriedAfterSessionRefresh = true;
+          console.warn('[KommoSession] 403 al crear salesbot. Renovando sesión y reintentando una vez...');
+
+          const { sessionId, csrfToken } = await refreshKommoSession(subdominio);
+          headersAjax = this.buildKommoAjaxHeaders(sessionId, csrfToken);
+          botId = await this.createSalesbotWithTemplate(baseUrl, headersAjax, templateId);
+        } else {
+          throw error;
+        }
+      }
 
       // Paso 3: Ejecutar el bot en el lead
       await this.executeSalesbot(baseUrl, headersApi, botId, idLead);
@@ -675,6 +683,20 @@ class OpenAIService {
 
   async getKommoSessionCookies(subdominio) {
     return getKommoSessionFromDB(subdominio);
+  }
+
+  buildKommoAjaxHeaders(sessionId, csrfToken) {
+    const subdominio = process.env.SUBDOMINIO;
+    const origin = `https://${subdominio}.kommo.com`;
+    return {
+      'Accept': 'application/json, text/plain, */*',
+      'Content-Type': 'application/json',
+      'Cookie': `session_id=${sessionId}; csrf_token=${csrfToken}`,
+      'Origin': origin,
+      'Referer': `${origin}/`,
+      'X-CSRF-Token': csrfToken,
+      'X-Requested-With': 'XMLHttpRequest',
+    };
   }
 
   async createChatTemplate(baseUrl, headers, messageContent) {
