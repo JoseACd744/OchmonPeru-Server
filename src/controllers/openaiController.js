@@ -10,6 +10,20 @@ class OpenAIController {
     this.formService = new FormService(); // Crear una instancia de FormService
   }
 
+  respondAccepted(res) {
+    if (!res.headersSent) {
+      res.status(200).json({ ok: true });
+    }
+  }
+
+  runInBackground(taskName, task) {
+    setImmediate(() => {
+      Promise.resolve(task()).catch(error => {
+        console.error(`Error en ${taskName}:`, error);
+      });
+    });
+  }
+
   /**
    * Maneja la solicitud para procesar un mensaje de cliente.
    * @param {Object} req - El objeto de solicitud.
@@ -40,24 +54,28 @@ class OpenAIController {
    */
   async handleBaseIA(req, res) {
     try {
-      const requestData = await this.openAIService.processRequestData(req);
-      if (!requestData) {
-        return res.status(400).json({ message: 'Datos de solicitud inválidos' });
-      }
+      const payload = req.body;
+      this.respondAccepted(res);
 
-      const { msj_client, lead_id, conversation_id } = requestData;
+      this.runInBackground('handleBaseIA', async () => {
+        const requestData = await this.openAIService.processRequestData({ body: payload });
+        if (!requestData) {
+          return;
+        }
 
-      // Crear un nuevo hilo si no se proporciona uno
-      let threadId = conversation_id || await this.openAIService.createdConversation();
+        const { msj_client, lead_id, conversation_id } = requestData;
 
-      // Procesar el mensaje y obtener la respuesta de OpenAI
-      const responseAI = await this.openAIService.main(msj_client, threadId, lead_id);
+        // Crear un nuevo hilo si no se proporciona uno
+        const threadId = conversation_id || await this.openAIService.createdConversation();
 
-      // Enviar la respuesta al cliente
-      res.status(200).json({ msj: responseAI, threadId: threadId });
+        // Procesar el mensaje y obtener la respuesta de OpenAI
+        await this.openAIService.main(msj_client, threadId, lead_id);
+      });
     } catch (error) {
       console.error("Error en handleBaseIA:", error);
-      res.status(500).json({ message: 'Error al procesar la solicitud' });
+      if (!res.headersSent) {
+        res.status(500).json({ message: 'Error al procesar la solicitud' });
+      }
     }
   }
 
@@ -68,14 +86,17 @@ class OpenAIController {
    */
   async handleFormData(req, res) {
     try {
-      const response = await this.formService.processRequestData(req); // Usar formService
-      if (!response) {
-        return res.status(400).json({ message: 'Datos de solicitud inválidos' });
-      }
-      res.status(200).json(response);
+      const payload = req.body;
+      this.respondAccepted(res);
+
+      this.runInBackground('handleFormData', async () => {
+        await this.formService.processRequestData({ body: payload }); // Usar formService
+      });
     } catch (error) {
       console.error("Error en handleFormData:", error);
-      res.status(500).json({ message: 'Error al procesar la solicitud' });
+      if (!res.headersSent) {
+        res.status(500).json({ message: 'Error al procesar la solicitud' });
+      }
     }
   }
 
