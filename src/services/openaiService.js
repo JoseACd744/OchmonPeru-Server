@@ -52,6 +52,38 @@ class OpenAIService {
     }
   }
 
+  async parseJsonResponse(response, operationName) {
+    const contentType = (response.headers.get('content-type') || '').toLowerCase();
+    const bodyText = await response.text();
+
+    let json = null;
+    if (bodyText) {
+      try {
+        json = JSON.parse(bodyText);
+      } catch (parseError) {
+        json = null;
+      }
+    }
+
+    if (!response.ok) {
+      const bodyPreview = bodyText ? bodyText.slice(0, 300).replace(/\s+/g, ' ').trim() : '(sin body)';
+      throw new Error(
+        `${operationName}: ${response.status} ${response.statusText}. ` +
+        `Content-Type: ${contentType || 'desconocido'}. Body: ${bodyPreview}`
+      );
+    }
+
+    if (!json) {
+      const bodyPreview = bodyText ? bodyText.slice(0, 300).replace(/\s+/g, ' ').trim() : '(sin body)';
+      throw new Error(
+        `${operationName}: respuesta no JSON valida. ` +
+        `Content-Type: ${contentType || 'desconocido'}. Body: ${bodyPreview}`
+      );
+    }
+
+    return json;
+  }
+
   async main(msg_client, conversationId, lead_id) {
     try {
       const promptId = process.env.PROMPT_ID_IDENTIFICAR;
@@ -579,9 +611,11 @@ class OpenAIService {
       // Paso 0: Obtener cookies de sesión via Puppeteer
       const { sessionId, csrfToken } = await this.getKommoSessionCookies(subdominio);
       headersAjax = {
+        'Accept': 'application/json, text/plain, */*',
         'Content-Type': 'application/json',
         'Authorization': 'Bearer ' + token,
         'Cookie': `session_id=${sessionId}; csrf_token=${csrfToken}`,
+        'X-CSRF-Token': csrfToken,
         'X-Requested-With': 'XMLHttpRequest',
       };
 
@@ -634,10 +668,7 @@ class OpenAIService {
       },
       body: botLaunch,
     })
-      .then(response => {
-        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-        return response.json();
-      })
+      .then(response => this.parseJsonResponse(response, 'Error al ejecutar bot fijo 102014'))
       .then(data => console.log('Respuesta del bot fijo 102014:', data))
       .catch(error => console.error('Error al ejecutar el bot fijo 102014:', error));
   }
@@ -654,8 +685,7 @@ class OpenAIService {
       body: JSON.stringify([{ name: 'rt_magique_bot_template', content: messageContent }]),
     });
 
-    const json = await res.json();
-    if (!res.ok) throw new Error(`Error creando template: ${res.status} ${JSON.stringify(json)}`);
+    const json = await this.parseJsonResponse(res, 'Error creando template');
 
     const template = json?._embedded?.chat_templates?.[0];
     if (!template?.id) throw new Error('No se pudo obtener el ID del template creado');
@@ -702,8 +732,7 @@ class OpenAIService {
       }),
     });
 
-    const json = await res.json();
-    if (!res.ok) throw new Error(`Error creando salesbot: ${res.status} ${JSON.stringify(json)}`);
+    const json = await this.parseJsonResponse(res, 'Error creando salesbot');
 
     const bot = json?._embedded?.items?.[0];
     if (!bot?.id) throw new Error('No se pudo obtener el ID del bot creado');
@@ -720,8 +749,7 @@ class OpenAIService {
       body: JSON.stringify({ entity_id: leadId, entity_type: 'leads' }),
     });
 
-    const json = await res.json();
-    if (!res.ok) throw new Error(`Error ejecutando bot: ${res.status} ${JSON.stringify(json)}`);
+    const json = await this.parseJsonResponse(res, 'Error ejecutando bot');
 
     console.log('Bot ejecutado:', json);
     return json;
