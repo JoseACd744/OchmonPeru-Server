@@ -740,6 +740,10 @@ class OpenAIService {
 
   async createSalesbotWithTemplate(baseUrl, headersAjax, templateId) {
     console.log(`Creando salesbot con template_id: ${templateId}...`);
+    const companyName = (process.env.SUBDOMINIO || 'empresa')
+      .replace(/[-_]+/g, ' ')
+      .replace(/\b\w/g, (char) => char.toUpperCase());
+
     const botText = JSON.stringify({
       "0": {
         question: [{
@@ -765,7 +769,7 @@ class OpenAIService {
         salesbot: [{
           id: 0,
           is_deleted: false,
-          name: 'RT Magique Bot (auto)',
+          name: `${companyName} Bot (auto)`,
           type: 2,
           is_active: true,
           is_launched: false,
@@ -815,10 +819,28 @@ class OpenAIService {
       body: JSON.stringify({ entity_id: leadId, entity_type: 'leads' }),
     });
 
-    const json = await this.parseJsonResponse(res, 'Error ejecutando bot');
+    const raw = await res.text();
+    let json = null;
 
-    console.log('Bot ejecutado:', json);
-    return json;
+    if (raw) {
+      try {
+        json = JSON.parse(raw);
+      } catch (_parseError) {
+        if (!res.ok) {
+          throw new Error(`Error ejecutando bot: ${res.status} Respuesta no JSON: ${raw.substring(0, 250)}`);
+        }
+
+        console.log('Bot ejecutado con respuesta no JSON:', raw.substring(0, 200));
+        return { success: true, status: res.status, raw };
+      }
+    }
+
+    if (!res.ok) {
+      throw new Error(`Error ejecutando bot: ${res.status} ${JSON.stringify(json)}`);
+    }
+
+    console.log('Bot ejecutado:', json || { success: true, status: res.status, message: 'Sin body' });
+    return json || { success: true, status: res.status, message: 'Bot ejecutado sin cuerpo de respuesta' };
   }
 
   async deleteSalesbotById(baseUrl, headersAjax, botId) {
