@@ -183,7 +183,7 @@ class OpenAIService {
       const requestParams = {
         prompt: { 
           id: promptId,
-          version: "4" // o especificar versión como "3"
+          version: "5" // o especificar versión como "3"
         },
         input: input,
         text: {
@@ -249,7 +249,32 @@ class OpenAIService {
             } else {
               outputValue = { success: true, message: '[MODO PRUEBA] Mensaje procesado' };
             }
-          } 
+          } else if (toolCall.name === 'send_assesor') {
+            const action_id = args.action_id;
+            console.log(`ID de acción para enviar a asesor: ${action_id}`);
+            if (lead_id) {
+              outputValue = await this.getInterest(action_id, lead_id);
+            } else {
+              outputValue = { success: true, message: '[MODO PRUEBA] Acción de envío a asesor procesada' };
+            }
+          } else if (toolCall.name === 'cotizado') {
+            const action_id = args.action_id;
+            console.log(`ID de acción para cotizado: ${action_id}`);
+            if (lead_id) {
+              outputValue = await this.getInterest(action_id, lead_id);
+            } else {
+              outputValue = { success: true, message: '[MODO PRUEBA] Acción de cotizado procesada' };
+            }            
+          } else if (toolCall.name === 'finalizado') {
+            const action_id = args.action_id;
+            console.log(`ID de acción para finalizado: ${action_id}`);
+            if (lead_id) {
+              outputValue = await this.getInterest(action_id, lead_id);
+            } else {
+              outputValue = { success: true, message: '[MODO PRUEBA] Acción de finalizado procesada' };
+            }
+          }
+
 
           // Agregar el output del tool call
           toolOutputItems.push({
@@ -439,7 +464,7 @@ class OpenAIService {
       body: JSON.stringify([{
         id: Number(lead_id),
         custom_fields_values: [
-          { field_id: 4147726, values: [{ value: action_id }] }
+          { field_id: 1761296, values: [{ value: action_id }] }
         ]
       }])
     };

@@ -136,7 +136,7 @@ class OpenAIService {
       body: JSON.stringify([{
         id: Number(lead_id),
         custom_fields_values: [
-          { field_id: 4147726, values: [{ value: action_id }] }
+          { field_id: 1761296, values: [{ value: action_id }] }
         ]
       }])
     };
