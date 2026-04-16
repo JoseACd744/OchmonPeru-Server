@@ -249,7 +249,7 @@ class OpenAIService {
             } else {
               outputValue = { success: true, message: '[MODO PRUEBA] Mensaje procesado' };
             }
-          } else if (toolCall.name === 'send_assesor') {
+          } else if (toolCall.name === 'send_asesor') {
             const action_id = args.action_id;
             console.log(`ID de acción para enviar a asesor: ${action_id}`);
             if (lead_id) {
