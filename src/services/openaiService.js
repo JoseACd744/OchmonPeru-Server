@@ -38,6 +38,7 @@ class OpenAIService {
         const newToken = await this.getToken();
         
         // Actualizar el header de autorización en las opciones
+        options.headers.Authorization = 'Bearer ' + newToken;
         options.headers.authorization = 'Bearer ' + newToken;
         
         // Reintentar la solicitud con el nuevo token
@@ -473,7 +474,7 @@ class OpenAIService {
       const subdominio = process.env.SUBDOMINIO;
       const response = await this.fetchWithTokenRetry(`https://${subdominio}.kommo.com/api/v4/leads`, options);
       console.log('response status:', response.status); // Log para depuración
-      const responseBody = await response.json();
+      const responseBody = await this.parseJsonResponse(response, 'Obtener leads Kommo');
       console.log('responseBody:', responseBody); // Log para depuración
   
       if (!response.ok) {
@@ -521,7 +522,7 @@ class OpenAIService {
       console.log('subdominio:', subdominio); // Log para depuración
       const response_get = await this.fetchWithTokenRetry(`https://${subdominio}.kommo.com/api/v4/leads/${idLead}`, optionsGetLead);
       console.log('response_get status:', response_get.status); // Log para depuración
-      const responseBody = await response_get.json();
+      const responseBody = await this.parseJsonResponse(response_get, `Obtener lead Kommo ${idLead}`);
       console.log('responseBody:', responseBody); // Log para depuración
   
       if (!responseBody.custom_fields_values) {
