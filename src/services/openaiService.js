@@ -454,19 +454,32 @@ class OpenAIService {
   }
 
   async buscarProducto(consulta) {
-  const buscarPromptId = "pmpt_69e65fb587248193bec155497bcadacb041d0ad511fbcb6a";
+  const buscarPromptId = process.env.PROMPT_ID_BUSCAR;
   if (!buscarPromptId) {
     console.error('PROMPT_ID_BUSCAR no está configurado en las variables de entorno');
     return { success: false, message: 'No se pudo realizar la búsqueda de producto en este momento.' };
   }
+
+  if (!consulta || typeof consulta !== 'string' || consulta.trim() === '') {
+    return { success: false, message: 'Consulta inválida para buscar producto.' };
+  }
  
   try {
-    console.log('Buscando producto:', consulta);
+    const consultaLimpia = consulta.trim();
+    console.log('Buscando producto:', consultaLimpia);
  
     // Crear respuesta usando Responses API con el prompt del buscador
     const response = await this.openai.responses.create({
-      prompt: { id: buscarPromptId },
-      input: [{ role: 'user', content: consulta }],
+      prompt: {
+        id: buscarPromptId,
+        version: "1"
+      },
+      input: [{ role: 'user', content: consultaLimpia }],
+      text: {
+        format: {
+          type: 'text'
+        }
+      },
       max_output_tokens: 1024,
       store: false // No necesitamos almacenar estas búsquedas internas
     });
