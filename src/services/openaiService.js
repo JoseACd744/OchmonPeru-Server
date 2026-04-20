@@ -184,7 +184,7 @@ class OpenAIService {
       const requestParams = {
         prompt: { 
           id: promptId,
-          version: "8" // o especificar versión como "3"
+          version: "9" // o especificar versión como "3"
         },
         input: input,
         text: {
@@ -274,6 +274,13 @@ class OpenAIService {
             } else {
               outputValue = { success: true, message: '[MODO PRUEBA] Acción de finalizado procesada' };
             }
+          } else   if (toolCall.name === 'buscar_producto') {
+            const consulta = args.consulta;
+            console.log(`Buscando producto: ${consulta}`);
+            outputValue = await this.buscarProducto(consulta);
+          } else {
+            console.warn(`Tool call desconocida: ${toolCall.name}`);
+            outputValue = { success: false, message: `Tool call desconocida: ${toolCall.name}` };
           }
 
 
@@ -445,6 +452,54 @@ class OpenAIService {
     
     return whatsappText;
   }
+
+  async buscarProducto(consulta) {
+  const buscarPromptId = "pmpt_69e65fb587248193bec155497bcadacb041d0ad511fbcb6a";
+  if (!buscarPromptId) {
+    console.error('PROMPT_ID_BUSCAR no está configurado en las variables de entorno');
+    return { success: false, message: 'No se pudo realizar la búsqueda de producto en este momento.' };
+  }
+ 
+  try {
+    console.log('Buscando producto:', consulta);
+ 
+    // Crear respuesta usando Responses API con el prompt del buscador
+    const response = await this.openai.responses.create({
+      prompt: { id: buscarPromptId },
+      input: [{ role: 'user', content: consulta }],
+      max_output_tokens: 1024,
+      store: false // No necesitamos almacenar estas búsquedas internas
+    });
+ 
+    // Extraer el texto de la respuesta
+    let resultado = '';
+    for (const item of response.output) {
+      if (item.type === 'message' && item.content) {
+        for (const content of item.content) {
+          if (content.type === 'output_text') {
+            resultado = content.text;
+            // Limpiar referencias de file_search
+            resultado = resultado.replace(/【\d+:\d+†[^】]+】/g, '');
+            resultado = resultado.replace(/\[\d+:\d+\+[^\]]+\]/g, '');
+            break;
+          }
+        }
+      }
+    }
+ 
+    if (!resultado) {
+      resultado = response.output_text || '';
+      resultado = resultado.replace(/【\d+:\d+†[^】]+】/g, '');
+    }
+ 
+    console.log('Resultado búsqueda:', resultado.substring(0, 200));
+    return { success: true, message: resultado };
+ 
+  } catch (error) {
+    console.error('Error en buscarProducto:', error);
+    return { success: false, message: 'Error al buscar el producto. Por favor intenta de nuevo.' };
+  }
+}
 
   // Enviar el valor de la call fuction para cambiar a un asesor
   async getInterest(action_id, lead_id) {
