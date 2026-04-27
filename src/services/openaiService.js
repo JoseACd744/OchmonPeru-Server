@@ -184,7 +184,7 @@ class OpenAIService {
       const requestParams = {
         prompt: { 
           id: promptId,
-          version: "14" // o especificar versión como "3"
+          version: "15" // o especificar versión como "3"
         },
         input: input,
         text: {
@@ -472,7 +472,7 @@ class OpenAIService {
     const response = await this.openai.responses.create({
       prompt: {
         id: buscarPromptId,
-        version: "5"
+        version: "6"
       },
       input: [{ role: 'user', content: consultaLimpia }],
       text: {
