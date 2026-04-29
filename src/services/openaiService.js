@@ -472,7 +472,7 @@ class OpenAIService {
     const response = await this.openai.responses.create({
       prompt: {
         id: buscarPromptId,
-        version: "16"
+        version: "6"
       },
       input: [{ role: 'user', content: consultaLimpia }],
       text: {
