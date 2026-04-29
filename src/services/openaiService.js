@@ -698,6 +698,7 @@ class OpenAIService {
     let headersAjax = null;
     let templateId = null;
     let botId = null;
+    let usedSessionRetry = false;
     const MAX_CREATE_BOT_ATTEMPTS = 2;
 
     try {
@@ -719,7 +720,8 @@ class OpenAIService {
             throw error;
           }
 
-          console.warn('[KommoSession] Error de autenticación en /ajax/v2/salesbot. Renovando sesión y reintentando...');
+          usedSessionRetry = true;
+          console.info('[KommoSession] Sesión temporalmente inválida en /ajax/v2/salesbot. Renovando sesión y reintentando...');
           const refreshed = await this.getKommoSessionCookies(subdominio, true);
           headersAjax = this.buildKommoAjaxHeaders(
             baseUrl,
@@ -733,6 +735,10 @@ class OpenAIService {
 
       // Paso 3: Ejecutar el bot en el lead
       await this.executeSalesbot(baseUrl, headersApi, botId, idLead);
+
+      if (usedSessionRetry) {
+        console.info('[KommoSession] Reintento de /ajax/v2/salesbot completado correctamente tras renovar la sesión.');
+      }
 
       console.log('Bot ejecutado correctamente en lead:', idLead);
 
