@@ -184,7 +184,7 @@ class OpenAIService {
       const requestParams = {
         prompt: { 
           id: promptId,
-          version: "18" // o especificar versión como "3"
+          version: "19" // o especificar versión como "3"
         },
         input: input,
         text: {
