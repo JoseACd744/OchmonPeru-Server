@@ -184,7 +184,7 @@ class OpenAIService {
       const requestParams = {
         prompt: { 
           id: promptId,
-          version: "20" // o especificar versión como "3"
+          version: "21" // o especificar versión como "3"
         },
         input: input,
         text: {
@@ -275,9 +275,9 @@ class OpenAIService {
               outputValue = { success: true, message: '[MODO PRUEBA] Acción de finalizado procesada' };
             }
           } else   if (toolCall.name === 'buscar_producto') {
-            const consulta = args.consulta;
-            console.log(`Buscando producto: ${consulta}`);
-            outputValue = await this.buscarProducto(consulta);
+              const { buscarProducto: buscarEnJSON } = require('../utils/buscarProducto');
+              console.log('Buscando producto con args:', args);
+              outputValue = buscarEnJSON(args);
           } else {
             console.warn(`Tool call desconocida: ${toolCall.name}`);
             outputValue = { success: false, message: `Tool call desconocida: ${toolCall.name}` };
@@ -401,109 +401,109 @@ class OpenAIService {
     return whatsappText;
   }
 
-async buscarProducto(consulta) {
-  const buscarPromptId = process.env.PROMPT_ID_BUSCAR;
-  if (!buscarPromptId) {
-    console.error('PROMPT_ID_BUSCAR no está configurado en las variables de entorno');
-    return { success: false, message: 'No se pudo realizar la búsqueda de producto en este momento.' };
-  }
+// async buscarProducto(consulta) {
+//   const buscarPromptId = process.env.PROMPT_ID_BUSCAR;
+//   if (!buscarPromptId) {
+//     console.error('PROMPT_ID_BUSCAR no está configurado en las variables de entorno');
+//     return { success: false, message: 'No se pudo realizar la búsqueda de producto en este momento.' };
+//   }
 
-  if (!consulta || typeof consulta !== 'string' || consulta.trim() === '') {
-    return { success: false, message: 'Consulta inválida para buscar producto.' };
-  }
+//   if (!consulta || typeof consulta !== 'string' || consulta.trim() === '') {
+//     return { success: false, message: 'Consulta inválida para buscar producto.' };
+//   }
  
-  try {
-    const { buscarProducto: buscarEnJSON } = require('../utils/buscarProducto');
-    const consultaLimpia = consulta.trim();
-    console.log('Buscando producto:', consultaLimpia);
+//   try {
+//     const { buscarProducto: buscarEnJSON } = require('../utils/buscarProducto');
+//     const consultaLimpia = consulta.trim();
+//     console.log('Buscando producto:', consultaLimpia);
  
-    const response = await this.openai.responses.create({
-      prompt: { id: buscarPromptId, version: "7" },
-      input: [{ role: 'user', content: consultaLimpia }],
-      text: { format: { type: 'text' } },
-      max_output_tokens: 1024,
-      store: false
-    });
+//     const response = await this.openai.responses.create({
+//       prompt: { id: buscarPromptId, version: "7" },
+//       input: [{ role: 'user', content: consultaLimpia }],
+//       text: { format: { type: 'text' } },
+//       max_output_tokens: 1024,
+//       store: false
+//     });
 
-    // ── Verificar si el agente buscador disparó el tool call ──────────────────
-    const toolCalls = response.output?.filter(item => item.type === 'function_call') || [];
+//     // ── Verificar si el agente buscador disparó el tool call ──────────────────
+//     const toolCalls = response.output?.filter(item => item.type === 'function_call') || [];
 
-    if (toolCalls.length > 0) {
-      const toolOutputItems = [];
+//     if (toolCalls.length > 0) {
+//       const toolOutputItems = [];
 
-      for (const toolCall of toolCalls) {
-        const args = JSON.parse(toolCall.arguments);
-        console.log('Agente buscador llamó buscar_producto con:', args);
+//       for (const toolCall of toolCalls) {
+//         const args = JSON.parse(toolCall.arguments);
+//         console.log('Agente buscador llamó buscar_producto con:', args);
 
-        const resultadoJSON = buscarEnJSON(args);
-        console.log('Resultado local:', JSON.stringify(resultadoJSON).substring(0, 200));
+//         const resultadoJSON = buscarEnJSON(args);
+//         console.log('Resultado local:', JSON.stringify(resultadoJSON).substring(0, 200));
 
-        toolOutputItems.push({
-          type: 'function_call_output',
-          call_id: toolCall.call_id,
-          output: JSON.stringify(resultadoJSON)
-        });
-      }
+//         toolOutputItems.push({
+//           type: 'function_call_output',
+//           call_id: toolCall.call_id,
+//           output: JSON.stringify(resultadoJSON)
+//         });
+//       }
 
-      // ── Segunda llamada con el resultado del tool ─────────────────────────
-      // Usar la misma versión de prompt que devolvió la primera respuesta
-      const followUpVersion = response?.prompt?.version || "7";
-      const followUp = await this.openai.responses.create({
-        prompt: { id: buscarPromptId, version: followUpVersion },
-        input: toolOutputItems,
-        previous_response_id: response.id,
-        text: { format: { type: 'text' } },
-        max_output_tokens: 1024,
-        store: false
-      });
+//       // ── Segunda llamada con el resultado del tool ─────────────────────────
+//       // Usar la misma versión de prompt que devolvió la primera respuesta
+//       const followUpVersion = response?.prompt?.version || "7";
+//       const followUp = await this.openai.responses.create({
+//         prompt: { id: buscarPromptId, version: followUpVersion },
+//         input: toolOutputItems,
+//         previous_response_id: response.id,
+//         text: { format: { type: 'text' } },
+//         max_output_tokens: 1024,
+//         store: false
+//       });
 
-      let resultado = '';
-      for (const item of followUp.output) {
-        if (item.type === 'message' && item.content) {
-          for (const content of item.content) {
-            if (content.type === 'output_text') {
-              resultado = content.text;
-              resultado = resultado.replace(/【\d+:\d+†[^】]+】/g, '');
-              resultado = resultado.replace(/\[\d+:\d+\+[^\]]+\]/g, '');
-              break;
-            }
-          }
-        }
-      }
+//       let resultado = '';
+//       for (const item of followUp.output) {
+//         if (item.type === 'message' && item.content) {
+//           for (const content of item.content) {
+//             if (content.type === 'output_text') {
+//               resultado = content.text;
+//               resultado = resultado.replace(/【\d+:\d+†[^】]+】/g, '');
+//               resultado = resultado.replace(/\[\d+:\d+\+[^\]]+\]/g, '');
+//               break;
+//             }
+//           }
+//         }
+//       }
 
-      if (!resultado) resultado = followUp.output_text || '';
-      console.log('Resultado búsqueda:', resultado.substring(0, 200));
-      return { success: true, message: resultado };
-    }
+//       if (!resultado) resultado = followUp.output_text || '';
+//       console.log('Resultado búsqueda:', resultado.substring(0, 200));
+//       return { success: true, message: resultado };
+//     }
  
-    // ── Si no hubo tool call, extraer texto directo ───────────────────────────
-    let resultado = '';
-    for (const item of response.output) {
-      if (item.type === 'message' && item.content) {
-        for (const content of item.content) {
-          if (content.type === 'output_text') {
-            resultado = content.text;
-            resultado = resultado.replace(/【\d+:\d+†[^】]+】/g, '');
-            resultado = resultado.replace(/\[\d+:\d+\+[^\]]+\]/g, '');
-            break;
-          }
-        }
-      }
-    }
+//     // ── Si no hubo tool call, extraer texto directo ───────────────────────────
+//     let resultado = '';
+//     for (const item of response.output) {
+//       if (item.type === 'message' && item.content) {
+//         for (const content of item.content) {
+//           if (content.type === 'output_text') {
+//             resultado = content.text;
+//             resultado = resultado.replace(/【\d+:\d+†[^】]+】/g, '');
+//             resultado = resultado.replace(/\[\d+:\d+\+[^\]]+\]/g, '');
+//             break;
+//           }
+//         }
+//       }
+//     }
  
-    if (!resultado) {
-      resultado = response.output_text || '';
-      resultado = resultado.replace(/【\d+:\d+†[^】]+】/g, '');
-    }
+//     if (!resultado) {
+//       resultado = response.output_text || '';
+//       resultado = resultado.replace(/【\d+:\d+†[^】]+】/g, '');
+//     }
  
-    console.log('Resultado búsqueda:', resultado.substring(0, 200));
-    return { success: true, message: resultado };
+//     console.log('Resultado búsqueda:', resultado.substring(0, 200));
+//     return { success: true, message: resultado };
  
-  } catch (error) {
-    console.error('Error en buscarProducto:', error);
-    return { success: false, message: 'Error al buscar el producto. Por favor intenta de nuevo.' };
-  }
-}
+//   } catch (error) {
+//     console.error('Error en buscarProducto:', error);
+//     return { success: false, message: 'Error al buscar el producto. Por favor intenta de nuevo.' };
+//   }
+// }
   // Enviar el valor de la call fuction para cambiar a un asesor
   async getInterest(action_id, lead_id) {
     // Asegurarse de que el token es válido antes de realizar la solicitud
