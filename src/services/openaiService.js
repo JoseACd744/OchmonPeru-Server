@@ -184,7 +184,7 @@ class OpenAIService {
       const requestParams = {
         prompt: { 
           id: promptId,
-          version: "19" // o especificar versión como "3"
+          version: "20" // o especificar versión como "3"
         },
         input: input,
         text: {
@@ -374,58 +374,6 @@ class OpenAIService {
     }
     return response.output_text || "Lo siento, no pude generar una respuesta.";
   }
-
-  // Fallback usando Chat Completions API (disponible en SDK actual)
-  async createResponseFallback(promptId, msg_client, conversationId, lead_id) {
-    try {
-      console.log("Usando Chat Completions API como fallback");
-      
-      // Obtener contexto de la conversación si existe
-      let context = conversationId ? this.getConversationContext(conversationId) : null;
-      let messages = [];
-
-      // Construir array de mensajes con el historial
-      if (context && context.messages.length > 0) {
-        messages = [...context.messages];
-      }
-
-      // Agregar el nuevo mensaje del usuario
-      messages.push({ role: "user", content: msg_client });
-
-      // Usar el modelo especificado o uno por defecto
-      const model = process.env.OPENAI_MODEL || "gpt-4o";
-
-      // Llamar a Chat Completions
-      const completion = await this.openai.chat.completions.create({
-        model: model,
-        messages: messages,
-        temperature: 0.2,
-      });
-
-      const responseText = completion.choices[0].message.content;
-
-      // Actualizar contexto de la conversación
-      if (conversationId) {
-        this.updateConversationContext(conversationId, {
-          lastResponseId: completion.id,
-          messages: [...messages, { role: 'assistant', content: responseText }]
-        });
-      }
-
-      // Limpiar y formatear la respuesta
-      let text = responseText.replace(/【\d+:\d+†[^】]+】/g, '');
-      const markdownPattern = /(\*\*|_|~~|`|# |\* |- )/;
-      if (markdownPattern.test(text)) {
-        text = this.transformMarkdownToWhatsApp(text);
-      }
-
-      return text;
-
-    } catch (error) {
-      console.error("Error en createResponseFallback:", error);
-      throw error;
-    }
-  }
   
 
   transformMarkdownToWhatsApp(markdownText) {
@@ -453,7 +401,7 @@ class OpenAIService {
     return whatsappText;
   }
 
-  async buscarProducto(consulta) {
+async buscarProducto(consulta) {
   const buscarPromptId = process.env.PROMPT_ID_BUSCAR;
   if (!buscarPromptId) {
     console.error('PROMPT_ID_BUSCAR no está configurado en las variables de entorno');
@@ -465,33 +413,74 @@ class OpenAIService {
   }
  
   try {
+    const { buscarProducto: buscarEnJSON } = require('../utils/buscarProducto');
     const consultaLimpia = consulta.trim();
     console.log('Buscando producto:', consultaLimpia);
  
-    // Crear respuesta usando Responses API con el prompt del buscador
     const response = await this.openai.responses.create({
-      prompt: {
-        id: buscarPromptId,
-        version: "6"
-      },
+      prompt: { id: buscarPromptId, version: "7" },
       input: [{ role: 'user', content: consultaLimpia }],
-      text: {
-        format: {
-          type: 'text'
-        }
-      },
+      text: { format: { type: 'text' } },
       max_output_tokens: 1024,
-      store: false // No necesitamos almacenar estas búsquedas internas
+      store: false
     });
+
+    // ── Verificar si el agente buscador disparó el tool call ──────────────────
+    const toolCalls = response.output?.filter(item => item.type === 'function_call') || [];
+
+    if (toolCalls.length > 0) {
+      const toolOutputItems = [];
+
+      for (const toolCall of toolCalls) {
+        const args = JSON.parse(toolCall.arguments);
+        console.log('Agente buscador llamó buscar_producto con:', args);
+
+        const resultadoJSON = buscarEnJSON(args);
+        console.log('Resultado local:', JSON.stringify(resultadoJSON).substring(0, 200));
+
+        toolOutputItems.push({
+          type: 'function_call_output',
+          call_id: toolCall.call_id,
+          output: JSON.stringify(resultadoJSON)
+        });
+      }
+
+      // ── Segunda llamada con el resultado del tool ─────────────────────────
+      const followUp = await this.openai.responses.create({
+        prompt: { id: buscarPromptId, version: "6" },
+        input: toolOutputItems,
+        previous_response_id: response.id,
+        text: { format: { type: 'text' } },
+        max_output_tokens: 1024,
+        store: false
+      });
+
+      let resultado = '';
+      for (const item of followUp.output) {
+        if (item.type === 'message' && item.content) {
+          for (const content of item.content) {
+            if (content.type === 'output_text') {
+              resultado = content.text;
+              resultado = resultado.replace(/【\d+:\d+†[^】]+】/g, '');
+              resultado = resultado.replace(/\[\d+:\d+\+[^\]]+\]/g, '');
+              break;
+            }
+          }
+        }
+      }
+
+      if (!resultado) resultado = followUp.output_text || '';
+      console.log('Resultado búsqueda:', resultado.substring(0, 200));
+      return { success: true, message: resultado };
+    }
  
-    // Extraer el texto de la respuesta
+    // ── Si no hubo tool call, extraer texto directo ───────────────────────────
     let resultado = '';
     for (const item of response.output) {
       if (item.type === 'message' && item.content) {
         for (const content of item.content) {
           if (content.type === 'output_text') {
             resultado = content.text;
-            // Limpiar referencias de file_search
             resultado = resultado.replace(/【\d+:\d+†[^】]+】/g, '');
             resultado = resultado.replace(/\[\d+:\d+\+[^\]]+\]/g, '');
             break;
@@ -513,7 +502,6 @@ class OpenAIService {
     return { success: false, message: 'Error al buscar el producto. Por favor intenta de nuevo.' };
   }
 }
-
   // Enviar el valor de la call fuction para cambiar a un asesor
   async getInterest(action_id, lead_id) {
     // Asegurarse de que el token es válido antes de realizar la solicitud
