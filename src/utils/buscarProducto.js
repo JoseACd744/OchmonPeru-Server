@@ -3,8 +3,8 @@
 const path = require('path');
 const fs   = require('fs');
 
-// ─── Ajusta esta ruta a donde tengas los JSON ────────────────────────────────
-const DATA_DIR = path.join(__dirname, 'data');
+// ─── Ajusta esta ruta a donde tengas los JSON (apunta al directorio src/data)
+const DATA_DIR = path.join(__dirname, '..', 'data');
 
 // ─── Archivos por tipo ────────────────────────────────────────────────────────
 const ARCHIVO = {
