@@ -446,8 +446,10 @@ async buscarProducto(consulta) {
       }
 
       // ── Segunda llamada con el resultado del tool ─────────────────────────
+      // Usar la misma versión de prompt que devolvió la primera respuesta
+      const followUpVersion = response?.prompt?.version || "7";
       const followUp = await this.openai.responses.create({
-        prompt: { id: buscarPromptId, version: "6" },
+        prompt: { id: buscarPromptId, version: followUpVersion },
         input: toolOutputItems,
         previous_response_id: response.id,
         text: { format: { type: 'text' } },
