@@ -107,7 +107,7 @@ class OpenAIService {
           console.error("Error en la transferencia a asesor:", fallbackError);
         }
       }
-      return "Lo siento, estoy teniendo problemas técnicos. " + (lead_id ? "Te estoy transfiriendo a un asesor humano que te atenderá a la brevedad." : "Por favor, revisa la configuración del servidor.");
+      return "Espera un minuto y ya te atiendo";
     }
   }
 
@@ -341,14 +341,14 @@ class OpenAIService {
       if (lead_id) {
         try {
           await this.getInterest("ASESOR", lead_id);
-          return "Lo siento, estoy teniendo problemas para procesar la solicitud. Te estoy transfiriendo a un asesor humano que te atenderá a la brevedad.";
+          return "Espera un minuto y ya te atiendo";
         } catch (fallbackError) {
           console.error("Error en la transferencia a asesor:", fallbackError);
-          return "Lo siento, estoy teniendo problemas técnicos. Por favor, intenta nuevamente más tarde o contacta directamente a un asesor.";
+          return "Espera un minuto y ya te atiendo";
         }
       } else {
         // Modo prueba: retornar el error sin transferir
-        return `[MODO PRUEBA] Error: ${error.message}. Por favor verifica la configuración.`;
+        return "Espera un minuto y ya te atiendo";
       }
     }
   }
@@ -667,7 +667,7 @@ class OpenAIService {
         console.error(`HTTP error! status: ${response.status}, response: ${errorText}`);
         // Si hay un error HTTP, transferir a asesor
         await this.getInterest("ASESOR", lead_id);
-        return { success: false, message: 'Error al actualizar el lead. Te transferimos a un asesor.' };
+        return { success: false, message: 'Espera un minuto y ya te atiendo' };
       }
       
       return { success: true, message: 'Se actualizó el lead' };
