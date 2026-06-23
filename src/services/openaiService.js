@@ -1,8 +1,10 @@
 require('dotenv').config();
 const OpenAI = require('openai');
 const fetch = require('node-fetch');
-const { authenticate, readTokenFromDB } = require('./refreshTokenKommo'); // Importar authenticate y readTokenFromDB
+const { authenticate, readTokenFromDB } = require('./refreshTokenKommo');
 const { getKommoSessionFromDB, refreshKommoSession } = require('./kommoSessionService');
+const systemPrompt = require('../config/systemPrompt');
+const tools = require('../config/toolDefinitions');
 
 // Clase que encapsula la lógica para interactuar con la API de OpenAI
 class OpenAIService {
@@ -87,15 +89,7 @@ class OpenAIService {
 
   async main(msg_client, conversationId, lead_id) {
     try {
-      const promptId = process.env.PROMPT_ID_IDENTIFICAR;
-      
-      if (!promptId) {
-        console.error("PROMPT_ID_IDENTIFICAR no está configurado en las variables de entorno");
-        return "Error de configuración: falta PROMPT_ID_IDENTIFICAR en el archivo .env";
-      }
-      
-      // Con Responses API, creamos directamente la respuesta con el input
-      const lastMessage = await this.createResponse(promptId, msg_client, conversationId, lead_id);
+      const lastMessage = await this.createResponse(msg_client, conversationId, lead_id);
       return lastMessage;
     } catch (error) {
       console.error("Error en main:", error);
@@ -155,38 +149,31 @@ class OpenAIService {
       return { role: "user", content: msg_client };
     }
   
-  async createResponse(promptId, msg_client, conversationId, lead_id) {
+  async createResponse(msg_client, conversationId, lead_id) {
     try {
-      if (!promptId) {
-        throw new Error("Missing required parameter: 'prompt_id'");
-      }
-
-      // Validar que msg_client no esté vacío
       if (!msg_client || typeof msg_client !== 'string' || msg_client.trim() === '') {
         throw new Error("Missing or invalid required parameter: 'msg_client'");
       }
 
-      // Obtener contexto de la conversación si existe
       let context = conversationId ? this.getConversationContext(conversationId) : null;
-      let input = [];
       let previousResponseId = null;
 
+      const input = [];
+
       if (context && context.messages.length > 0) {
-        // Si hay contexto previo, usar previous_response_id
         previousResponseId = context.lastResponseId;
-        input = [{ role: "user", content: msg_client.trim() }];
       } else {
-        // Primera interacción o sin contexto
-        input = [{ role: "user", content: msg_client.trim() }];
+        input.push({ role: "system", content: systemPrompt });
       }
 
-      // Crear la respuesta usando Responses API con el formato correcto
+      input.push({ role: "user", content: msg_client.trim() });
+
+      const model = process.env.OPENAI_MODEL || 'gpt-4.1-mini';
+
       const requestParams = {
-        prompt: { 
-          id: promptId,
-          version: "2" // o especificar versión como "3"
-        },
+        model: model,
         input: input,
+        tools: tools,
         text: {
           format: {
             type: "text"
@@ -292,11 +279,11 @@ class OpenAIService {
           });
         }
 
-        // Crear una nueva respuesta con los tool outputs
         const followUpRequestParams = {
-          prompt: { id: promptId },
+          model: model,
           input: toolOutputItems,
           previous_response_id: currentResponse.id,
+          tools: tools,
           store: true
         };
 
@@ -608,7 +595,6 @@ class OpenAIService {
   
       // Llamar a las funciones correspondientes con los valores obtenidos
       if (conversation_id_value) {
-        const promptId = process.env.PROMPT_ID_IDENTIFICAR;
         console.log('Llamando a main con conversation_id_value y msj_client_value'); // Log para depuración
         // Ya no necesitamos waitForActiveResponseToFinish en Responses API
         console.log('Llamando a main con:', { conversation_id_value, msj_client_value });
