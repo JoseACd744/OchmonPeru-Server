@@ -1,10 +1,35 @@
 require('dotenv').config();
 const OpenAI = require('openai');
 const fetch = require('node-fetch');
+const https = require('https');
 const { authenticate, readTokenFromDB } = require('./refreshTokenKommo');
 const { getKommoSessionFromDB, refreshKommoSession } = require('./kommoSessionService');
 const systemPrompt = require('../config/systemPrompt');
 const tools = require('../config/toolDefinitions');
+
+// Deshabilita keep-alive para evitar sockets reutilizados a medio cerrar,
+// una causa común de ERR_STREAM_PREMATURE_CLOSE contra la API de Kommo.
+const kommoAgent = new https.Agent({ keepAlive: false });
+
+const RETRIABLE_CODES = new Set(['ERR_STREAM_PREMATURE_CLOSE', 'ECONNRESET', 'ETIMEDOUT', 'EPIPE']);
+
+// Wrapper de fetch con reintentos ante fallos de red transitorios
+// (ej. la conexión con Kommo se corta a mitad de la respuesta).
+async function fetchWithRetry(url, options = {}, retries = 2, delayMs = 500) {
+  const fetchOptions = { ...options, agent: kommoAgent };
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await fetch(url, fetchOptions);
+    } catch (err) {
+      const isRetriable = RETRIABLE_CODES.has(err.code) || RETRIABLE_CODES.has(err.errno);
+      if (!isRetriable || attempt === retries) {
+        throw err;
+      }
+      console.warn(`fetch a ${url} falló (intento ${attempt + 1}/${retries + 1}): ${err.message}. Reintentando...`);
+      await new Promise((resolve) => setTimeout(resolve, delayMs * (attempt + 1)));
+    }
+  }
+}
 
 // Clase que encapsula la lógica para interactuar con la API de OpenAI
 class OpenAIService {
@@ -27,8 +52,8 @@ class OpenAIService {
     const MAX_RETRIES = 1;
     
     try {
-      const response = await fetch(url, options);
-      
+      const response = await fetchWithRetry(url, options);
+
       // Si obtenemos un 401 (Unauthorized), el token podría estar vencido
       if (response.status === 401 && retryCount < MAX_RETRIES) {
         console.log('Token inválido (401), actualizando token...');
@@ -747,7 +772,7 @@ class OpenAIService {
 
   launchFixedSalesbot(idLead, token, subdominio) {
     const botLaunch = JSON.stringify([{ bot_id: 61564, entity_type: 2, entity_id: idLead }]);
-    fetch(`https://${subdominio}.kommo.com/api/v2/salesbot/run`, {
+    fetchWithRetry(`https://${subdominio}.kommo.com/api/v2/salesbot/run`, {
       method: 'POST',
       headers: {
         'Accept': 'application/json',
@@ -799,7 +824,7 @@ class OpenAIService {
 
   async createChatTemplate(baseUrl, headers, messageContent) {
     console.log('Creando chat template...');
-    const res = await fetch(`${baseUrl}/api/v4/chats/templates`, {
+    const res = await fetchWithRetry(`${baseUrl}/api/v4/chats/templates`, {
       method: 'POST',
       headers,
       body: JSON.stringify([{ name: 'rt_magique_bot_template', content: messageContent }]),
@@ -838,7 +863,7 @@ class OpenAIService {
       conversation: false,
     });
 
-    const res = await fetch(`${baseUrl}/ajax/v2/salesbot`, {
+    const res = await fetchWithRetry(`${baseUrl}/ajax/v2/salesbot`, {
       method: 'POST',
       headers: headersAjax,
       body: JSON.stringify({
@@ -889,7 +914,7 @@ class OpenAIService {
 
   async executeSalesbot(baseUrl, headers, botId, leadId) {
     console.log(`Ejecutando bot ${botId} en lead ${leadId}...`);
-    const res = await fetch(`${baseUrl}/api/v4/bots/${botId}/run`, {
+    const res = await fetchWithRetry(`${baseUrl}/api/v4/bots/${botId}/run`, {
       method: 'POST',
       headers,
       body: JSON.stringify({ entity_id: leadId, entity_type: 'leads' }),
@@ -921,7 +946,7 @@ class OpenAIService {
 
   async deleteSalesbotById(baseUrl, headersAjax, botId) {
     console.log(`Eliminando salesbot ID: ${botId}...`);
-    const res = await fetch(`${baseUrl}/ajax/v2/salesbot/`, {
+    const res = await fetchWithRetry(`${baseUrl}/ajax/v2/salesbot/`, {
       method: 'DELETE',
       headers: headersAjax,
       body: JSON.stringify([botId]),
@@ -936,7 +961,7 @@ class OpenAIService {
 
   async deleteChatTemplate(baseUrl, headers, templateId) {
     console.log(`Eliminando template ID: ${templateId}...`);
-    const res = await fetch(`${baseUrl}/api/v4/chats/templates/${templateId}`, {
+    const res = await fetchWithRetry(`${baseUrl}/api/v4/chats/templates/${templateId}`, {
       method: 'DELETE',
       headers,
     });

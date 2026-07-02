@@ -1,7 +1,32 @@
 require('dotenv').config();
 const OpenAI = require('openai');
 const fetch = require('node-fetch');
+const https = require('https');
 const { authenticate } = require('./refreshTokenKommo'); // Importar authenticate
+
+// Deshabilita keep-alive para evitar sockets reutilizados a medio cerrar,
+// una causa común de ERR_STREAM_PREMATURE_CLOSE contra la API de Kommo.
+const kommoAgent = new https.Agent({ keepAlive: false });
+
+const RETRIABLE_CODES = new Set(['ERR_STREAM_PREMATURE_CLOSE', 'ECONNRESET', 'ETIMEDOUT', 'EPIPE']);
+
+// Wrapper de fetch con reintentos ante fallos de red transitorios
+// (ej. la conexión con Kommo se corta a mitad de la respuesta).
+async function fetchWithRetry(url, options = {}, retries = 2, delayMs = 500) {
+  const fetchOptions = { ...options, agent: kommoAgent };
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await fetch(url, fetchOptions);
+    } catch (err) {
+      const isRetriable = RETRIABLE_CODES.has(err.code) || RETRIABLE_CODES.has(err.errno);
+      if (!isRetriable || attempt === retries) {
+        throw err;
+      }
+      console.warn(`fetch a ${url} falló (intento ${attempt + 1}/${retries + 1}): ${err.message}. Reintentando...`);
+      await new Promise((resolve) => setTimeout(resolve, delayMs * (attempt + 1)));
+    }
+  }
+}
 
 // Clase que encapsula la lógica para interactuar con la API de OpenAI
 class OpenAIService {
@@ -143,7 +168,7 @@ class OpenAIService {
 
     try {
       const subdominio = process.env.SUBDOMINIO;
-      const response = await fetch(`https://${subdominio}.kommo.com/api/v4/leads`, options);
+      const response = await fetchWithRetry(`https://${subdominio}.kommo.com/api/v4/leads`, options);
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
@@ -186,7 +211,7 @@ class OpenAIService {
   
       const subdominio = process.env.SUBDOMINIO;
       console.log('subdominio:', subdominio); // Log para depuración
-      const response_get = await fetch(`https://${subdominio}.kommo.com/api/v4/leads/${idLead}`, optionsGetLead);
+      const response_get = await fetchWithRetry(`https://${subdominio}.kommo.com/api/v4/leads/${idLead}`, optionsGetLead);
       console.log('response_get status:', response_get.status); // Log para depuración
       const responseBody = await response_get.json();
       console.log('responseBody:', responseBody); // Log para depuración
@@ -271,7 +296,7 @@ class OpenAIService {
   
     try {
       const subdominio = process.env.SUBDOMINIO;
-      const response = await fetch(`https://${subdominio}.kommo.com/api/v4/leads`, options);
+      const response = await fetchWithRetry(`https://${subdominio}.kommo.com/api/v4/leads`, options);
       if (!response.ok) {
         const errorText = await response.text();
         throw new Error(`HTTP error! status: ${response.status}, response: ${errorText}`);
@@ -305,7 +330,7 @@ class OpenAIService {
 
     try {
       const subdominio = process.env.SUBDOMINIO;
-      const response = await fetch(`https://${subdominio}.kommo.com/api/v4/leads`, options);
+      const response = await fetchWithRetry(`https://${subdominio}.kommo.com/api/v4/leads`, options);
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
