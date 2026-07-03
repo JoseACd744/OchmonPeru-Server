@@ -18,6 +18,12 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, '../public/test-chat.html'));
 });
 
+// Health check: permite verificar tras cada deploy que el pin de versión de Node
+// realmente aplicó (ver package.json engines.node / .nvmrc).
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', node: process.version });
+});
+
 // Configura las rutas para la aplicación
 app.use('/api/openai', openaiRoutes);
 
