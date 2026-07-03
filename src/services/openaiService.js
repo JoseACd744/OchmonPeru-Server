@@ -35,9 +35,59 @@ async function fetchWithRetry(url, options = {}, retries = 2, delayMs = 500) {
 class OpenAIService {
   constructor() {
     const apiKey = process.env.OPENAI_API_KEY;
-    this.openai = new OpenAI({ apiKey: apiKey });
+    // keepAlive: false evita reutilizar sockets a medio cerrar, la misma causa
+    // de ERR_STREAM_PREMATURE_CLOSE que ya vimos contra Kommo.
+    const openaiAgent = new https.Agent({ keepAlive: false });
+    this.openai = new OpenAI({ apiKey: apiKey, httpAgent: openaiAgent });
     // Map para almacenar contexto de conversaciones (temporal, en producción usar base de datos)
     this.conversationContexts = new Map();
+  }
+
+  // Detecta errores de red transitorios (incluye los envueltos en `cause`,
+  // como OpenAIError -> Premature close proveniente de node-fetch).
+  isRetriableStreamError(error) {
+    const codes = [error?.code, error?.errno, error?.cause?.code, error?.cause?.errno];
+    return codes.some((code) => code && RETRIABLE_CODES.has(code));
+  }
+
+  // Ejecuta el stream de Responses API con reintentos ante cortes de conexión
+  // transitorios. Es seguro reintentar completo: no se emite nada al usuario
+  // hasta que el stream termina, así que no hay efectos duplicados.
+  async streamOpenAIResponse(requestParams, retries = 2, delayMs = 500) {
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        const stream = await this.openai.responses.stream(requestParams);
+        let currentResponse = null;
+        const toolCallItems = [];
+
+        for await (const event of stream) {
+          // Guardar la respuesta completa cuando termine
+          // Intentar múltiples tipos de eventos
+          if (event.type === 'response.done' || event.type === 'done' || event.response) {
+            currentResponse = event.response || event;
+            console.log('Respuesta completa recibida:', JSON.stringify(currentResponse).substring(0, 200));
+
+            // Buscar tool calls en los output items
+            if (currentResponse.output) {
+              for (const item of currentResponse.output) {
+                if (item.type === 'function_call') {
+                  toolCallItems.push(item);
+                }
+              }
+            }
+          }
+        }
+
+        return { currentResponse, toolCallItems };
+      } catch (error) {
+        const isRetriable = this.isRetriableStreamError(error);
+        if (!isRetriable || attempt === retries) {
+          throw error;
+        }
+        console.warn(`Stream de OpenAI falló (intento ${attempt + 1}/${retries + 1}): ${error.message}. Reintentando...`);
+        await new Promise((resolve) => setTimeout(resolve, delayMs * (attempt + 1)));
+      }
+    }
   }
 
   // Obtener el token desde la base de datos
@@ -215,31 +265,8 @@ class OpenAIService {
 
       console.log('Creando respuesta con Responses API...');
       console.log('Input:', JSON.stringify(input));
-      const stream = await this.openai.responses.stream(requestParams);
-
-      // Variables para manejar el loop de tool calls
-      let currentResponse = null;
-      let needsToolHandling = false;
-      let toolCallItems = [];
-
-      for await (const event of stream) {        
-        // Guardar la respuesta completa cuando termine
-        // Intentar múltiples tipos de eventos
-        if (event.type === 'response.done' || event.type === 'done' || event.response) {
-          currentResponse = event.response || event;
-          console.log('Respuesta completa recibida:', JSON.stringify(currentResponse).substring(0, 200));
-          
-          // Buscar tool calls en los output items
-          if (currentResponse.output) {
-            for (const item of currentResponse.output) {
-              if (item.type === 'function_call') {
-                needsToolHandling = true;
-                toolCallItems.push(item);
-              }
-            }
-          }
-        }
-      }
+      const { currentResponse, toolCallItems } = await this.streamOpenAIResponse(requestParams);
+      const needsToolHandling = toolCallItems.length > 0;
 
       // Si hay tool calls que manejar, procesarlos
       if (needsToolHandling && toolCallItems.length > 0) {
