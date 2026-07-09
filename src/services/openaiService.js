@@ -268,96 +268,62 @@ class OpenAIService {
       const { currentResponse, toolCallItems } = await this.streamOpenAIResponse(requestParams);
       const needsToolHandling = toolCallItems.length > 0;
 
-      // Si hay tool calls que manejar, procesarlos
+      // Si hay tool calls que manejar, procesarlos. El modelo puede encadenar
+      // varias rondas de tools (ej. buscar_producto y luego calcular_cotizacion
+      // con el resultado), así que se itera hasta que ya no pida más tools.
       if (needsToolHandling && toolCallItems.length > 0) {
-        const toolOutputItems = [];
+        let response = currentResponse;
+        let pendingToolCalls = toolCallItems;
+        const MAX_TOOL_ROUNDS = 6;
+        let round = 0;
 
-        for (const toolCall of toolCallItems) {
-          const args = JSON.parse(toolCall.arguments);
-          console.log("ToolCall detectado:", toolCall.name);
-          console.log("Argumentos procesados:", args);
+        while (pendingToolCalls.length > 0 && round < MAX_TOOL_ROUNDS) {
+          round++;
+          const toolOutputItems = [];
 
-          let outputValue = null;
+          for (const toolCall of pendingToolCalls) {
+            const args = JSON.parse(toolCall.arguments);
+            console.log("ToolCall detectado:", toolCall.name);
+            console.log("Argumentos procesados:", args);
 
-          if (toolCall.name === 'unknow_message') {
-            const customer_message = args.customer_message;
-            const action_id = args.action_id;
-            console.log(`Mensaje del cliente: ${customer_message}`);
-            console.log(`ID de acción: ${action_id}`);
-            if (lead_id) {
-              outputValue = await this.postAppScriptAndKommo(action_id, customer_message, lead_id);
-            } else {
-              outputValue = { success: true, message: '[MODO PRUEBA] Mensaje procesado' };
-            }
-          } else if (toolCall.name === 'send_asesor') {
-            const action_id = args.action_id;
-            console.log(`ID de acción para enviar a asesor: ${action_id}`);
-            if (lead_id) {
-              outputValue = await this.getInterest(action_id, lead_id);
-            } else {
-              outputValue = { success: true, message: '[MODO PRUEBA] Acción de envío a asesor procesada' };
-            }
-          } else if (toolCall.name === 'cotizado') {
-            const action_id = args.action_id;
-            console.log(`ID de acción para cotizado: ${action_id}`);
-            if (lead_id) {
-              outputValue = await this.getInterest(action_id, lead_id);
-            } else {
-              outputValue = { success: true, message: '[MODO PRUEBA] Acción de cotizado procesada' };
-            }            
-          } else if (toolCall.name === 'finalizado') {
-            const action_id = args.action_id;
-            console.log(`ID de acción para finalizado: ${action_id}`);
-            if (lead_id) {
-              outputValue = await this.getInterest(action_id, lead_id);
-            } else {
-              outputValue = { success: true, message: '[MODO PRUEBA] Acción de finalizado procesada' };
-            }
-          } else   if (toolCall.name === 'buscar_producto') {
-              const { buscarProducto: buscarEnJSON } = require('../utils/buscarProducto');
-              console.log('Buscando producto con args:', args);
-              outputValue = buscarEnJSON(args);
-          } else if (toolCall.name === 'calcular_cotizacion') {
-              const { calcularCotizacion } = require('../utils/calcularCotizacion');
-              console.log('Calculando cotización con args:', args);
-              outputValue = calcularCotizacion(args);
-          } else {
-            console.warn(`Tool call desconocida: ${toolCall.name}`);
-            outputValue = { success: false, message: `Tool call desconocida: ${toolCall.name}` };
+            const outputValue = await this.executeToolCall(toolCall.name, args, lead_id);
+
+            toolOutputItems.push({
+              type: 'function_call_output',
+              call_id: toolCall.call_id,
+              output: JSON.stringify(outputValue)
+            });
           }
 
+          const followUpRequestParams = {
+            model: model,
+            input: toolOutputItems,
+            previous_response_id: response.id,
+            tools: tools,
+            store: true
+          };
 
-          // Agregar el output del tool call
-          toolOutputItems.push({
-            type: 'function_call_output',
-            call_id: toolCall.call_id,
-            output: JSON.stringify(outputValue)
-          });
+          response = await this.openai.responses.create(followUpRequestParams);
+          pendingToolCalls = (response.output || []).filter((item) => item.type === 'function_call');
         }
 
-        const followUpRequestParams = {
-          model: model,
-          input: toolOutputItems,
-          previous_response_id: currentResponse.id,
-          tools: tools,
-          store: true
-        };
-
-        const followUpResponse = await this.openai.responses.create(followUpRequestParams);
+        if (pendingToolCalls.length > 0) {
+          console.warn(`Se alcanzó el máximo de ${MAX_TOOL_ROUNDS} rondas de tool calls sin obtener una respuesta final.`);
+        }
 
         // Actualizar contexto de la conversación
         if (conversationId) {
           this.updateConversationContext(conversationId, {
-            lastResponseId: followUpResponse.id,
-            messages: [...(context?.messages || []), 
+            lastResponseId: response.id,
+            messages: [...(context?.messages || []),
               { role: 'user', content: msg_client },
-              { role: 'assistant', content: this.extractTextFromResponse(followUpResponse) }
+              { role: 'assistant', content: this.extractTextFromResponse(response) }
             ]
           });
         }
 
         // Extraer y retornar el texto de la respuesta final
-        return this.extractTextFromResponse(followUpResponse);
+        return this.extractTextFromResponse(response);
       }
 
       // Si no hay tool calls, retornar el texto directamente
@@ -394,6 +360,62 @@ class OpenAIService {
         return "Espera un minuto y ya te atiendo";
       }
     }
+  }
+
+  // Ejecuta una tool call individual y retorna su output
+  async executeToolCall(toolName, args, lead_id) {
+    if (toolName === 'unknow_message') {
+      const customer_message = args.customer_message;
+      const action_id = args.action_id;
+      console.log(`Mensaje del cliente: ${customer_message}`);
+      console.log(`ID de acción: ${action_id}`);
+      if (lead_id) {
+        return await this.postAppScriptAndKommo(action_id, customer_message, lead_id);
+      }
+      return { success: true, message: '[MODO PRUEBA] Mensaje procesado' };
+    }
+
+    if (toolName === 'send_asesor') {
+      const action_id = args.action_id;
+      console.log(`ID de acción para enviar a asesor: ${action_id}`);
+      if (lead_id) {
+        return await this.getInterest(action_id, lead_id);
+      }
+      return { success: true, message: '[MODO PRUEBA] Acción de envío a asesor procesada' };
+    }
+
+    if (toolName === 'cotizado') {
+      const action_id = args.action_id;
+      console.log(`ID de acción para cotizado: ${action_id}`);
+      if (lead_id) {
+        return await this.getInterest(action_id, lead_id);
+      }
+      return { success: true, message: '[MODO PRUEBA] Acción de cotizado procesada' };
+    }
+
+    if (toolName === 'finalizado') {
+      const action_id = args.action_id;
+      console.log(`ID de acción para finalizado: ${action_id}`);
+      if (lead_id) {
+        return await this.getInterest(action_id, lead_id);
+      }
+      return { success: true, message: '[MODO PRUEBA] Acción de finalizado procesada' };
+    }
+
+    if (toolName === 'buscar_producto') {
+      const { buscarProducto: buscarEnJSON } = require('../utils/buscarProducto');
+      console.log('Buscando producto con args:', args);
+      return buscarEnJSON(args);
+    }
+
+    if (toolName === 'calcular_cotizacion') {
+      const { calcularCotizacion } = require('../utils/calcularCotizacion');
+      console.log('Calculando cotización con args:', args);
+      return calcularCotizacion(args);
+    }
+
+    console.warn(`Tool call desconocida: ${toolName}`);
+    return { success: false, message: `Tool call desconocida: ${toolName}` };
   }
 
   // Helper para extraer texto de una respuesta
