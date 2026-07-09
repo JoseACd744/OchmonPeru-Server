@@ -64,6 +64,66 @@ const tools = [
   },
   {
     type: 'function',
+    name: 'calcular_cotizacion',
+    description: 'Calcula de forma EXACTA el monto total de una cotización (y opcionalmente el peso total) a partir del PRECIO obtenido con buscar_producto y las cantidades/medidas indicadas por el cliente. SIEMPRE usar esta función para obtener cualquier total; NUNCA calcules el total manualmente ni de memoria. Permite uno o varios productos en una misma cotización (un elemento en "items" por cada producto/espesor/color distinto). Usa el "total" y los "subtotal" que devuelve la función tal cual, sin recalcularlos ni redondearlos de nuevo.',
+    strict: false,
+    parameters: {
+      type: 'object',
+      properties: {
+        items: {
+          type: 'array',
+          description: 'Lista de productos a cotizar. Un elemento por cada producto, espesor o color distinto que se esté cotizando.',
+          items: {
+            type: 'object',
+            properties: {
+              descripcion: {
+                type: 'string',
+                description: 'Descripción breve del producto, ej. "Cobertura Aluzinc TR4 0.40mm Verde Con Film".'
+              },
+              modo: {
+                type: 'string',
+                enum: ['planchas', 'area', 'unidades'],
+                description: '"planchas" = cantidad de planchas x largo en metros (usa cantidad_planchas y largo_m). "area" = área total en m² (usa area_m2). "unidades" = para accesorios, unidad de 3 metros (usa cantidad_unidades).'
+              },
+              precio_unitario: {
+                type: 'number',
+                description: 'Campo PRECIO obtenido de buscar_producto para este producto, tal cual (por metro lineal, o por unidad de 3m en accesorios).'
+              },
+              cantidad_planchas: {
+                type: 'number',
+                description: 'SOLO modo "planchas". Número de planchas.'
+              },
+              largo_m: {
+                type: 'number',
+                description: 'SOLO modo "planchas". Largo de cada plancha en metros.'
+              },
+              area_m2: {
+                type: 'number',
+                description: 'SOLO modo "area". Área total en metros cuadrados.'
+              },
+              cantidad_unidades: {
+                type: 'number',
+                description: 'SOLO modo "unidades" (accesorios). Número de unidades de 3 metros.'
+              },
+              peso_unitario_kg: {
+                type: 'number',
+                description: 'Opcional. Campo PESO KG PROMEDIO COMERCIAL obtenido de buscar_producto, solo si el cliente pidió el peso total.'
+              }
+            },
+            required: ['modo', 'precio_unitario']
+          }
+        },
+        moneda: {
+          type: 'string',
+          enum: ['PEN', 'USD'],
+          description: 'Moneda de la cotización. "PEN" para soles (todo excepto paneles). "USD" para paneles de Poliestireno/Poliuretano.'
+        }
+      },
+      required: ['items']
+    }
+  },
+  {
+    type: 'function',
     name: 'send_asesor',
     description: 'Send information or trigger an action for the specified ASESOR action ID',
     strict: true,

@@ -317,6 +317,10 @@ class OpenAIService {
               const { buscarProducto: buscarEnJSON } = require('../utils/buscarProducto');
               console.log('Buscando producto con args:', args);
               outputValue = buscarEnJSON(args);
+          } else if (toolCall.name === 'calcular_cotizacion') {
+              const { calcularCotizacion } = require('../utils/calcularCotizacion');
+              console.log('Calculando cotización con args:', args);
+              outputValue = calcularCotizacion(args);
           } else {
             console.warn(`Tool call desconocida: ${toolCall.name}`);
             outputValue = { success: false, message: `Tool call desconocida: ${toolCall.name}` };
