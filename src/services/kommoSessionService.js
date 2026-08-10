@@ -4,6 +4,10 @@ const KommoSession = require('../models/KommoSession');
 
 const SESSION_TTL_MS = 48 * 60 * 60 * 1000; // 48 horas
 
+// Refrescos en curso por subdominio, para que llamadas concurrentes reutilicen
+// el mismo browser en vez de lanzar uno cada una (causaba EAGAIN por falta de recursos)
+const pendingRefreshes = new Map();
+
 // Verifica si las cookies en DB son válidas (menos de 48h)
 async function isSessionValid(subdominio) {
   const record = await KommoSession.findOne({ where: { domain: subdominio } });
@@ -12,13 +16,25 @@ async function isSessionValid(subdominio) {
   return age < SESSION_TTL_MS;
 }
 
+function refreshKommoSession(subdominio) {
+  if (pendingRefreshes.has(subdominio)) {
+    return pendingRefreshes.get(subdominio);
+  }
+
+  const promise = doRefreshKommoSession(subdominio).finally(() => {
+    pendingRefreshes.delete(subdominio);
+  });
+  pendingRefreshes.set(subdominio, promise);
+  return promise;
+}
+
 // Lanza Puppeteer, hace login y guarda las cookies en DB
-async function refreshKommoSession(subdominio) {
+async function doRefreshKommoSession(subdominio) {
   console.log(`[KommoSession] Iniciando sesión en Kommo con Puppeteer (subdominio: ${subdominio})...`);
 
   const browser = await puppeteer.launch({
     headless: true,
-    args: ['--no-sandbox', '--disable-setuid-sandbox'],
+    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
   });
 
   try {
