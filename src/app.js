@@ -2,6 +2,7 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const path = require('path');
 const openaiRoutes = require('./routes/openaiRoutes');
+const sessionRoutes = require('./routes/sessionRoutes');
 
 // Inicializa la aplicación Express
 const app = express();
@@ -26,6 +27,7 @@ app.get('/health', (req, res) => {
 
 // Configura las rutas para la aplicación
 app.use('/api/openai', openaiRoutes);
+app.use('/api/session', sessionRoutes);
 
 // Exporta la aplicación para ser utilizada en el servidor
 module.exports = app;
