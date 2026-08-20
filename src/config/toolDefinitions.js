@@ -65,7 +65,7 @@ const tools = [
   {
     type: 'function',
     name: 'calcular_cotizacion',
-    description: 'Calcula de forma EXACTA el monto total de una cotización (y opcionalmente el peso total) a partir del PRECIO obtenido con buscar_producto y las cantidades/medidas indicadas por el cliente. SIEMPRE usar esta función para obtener cualquier total; NUNCA calcules el total manualmente ni de memoria. Permite uno o varios productos en una misma cotización (un elemento en "items" por cada producto/espesor/color distinto). Usa el "total" y los "subtotal" que devuelve la función tal cual, sin recalcularlos ni redondearlos de nuevo.',
+    description: 'Calcula de forma EXACTA el monto total de una cotización (y opcionalmente el peso total) a partir del PRECIO obtenido con buscar_producto y las cantidades/medidas indicadas por el cliente. SIEMPRE usar esta función para obtener cualquier total; NUNCA calcules el total manualmente ni de memoria. Permite uno o varios productos en una misma cotización (un elemento en "items" por cada producto/espesor/color distinto). Usa el "total" y los "subtotal" que devuelve la función tal cual, sin recalcularlos ni redondearlos de nuevo. Para UPVC solo acepta planchas estándar de 3.90 m, 5.90 m y 11.80 m por 1.00 m de ancho; 4 m y 6 m no son medidas estándar.',
     strict: false,
     parameters: {
       type: 'object',
@@ -76,6 +76,20 @@ const tools = [
           items: {
             type: 'object',
             properties: {
+              tipo_producto: {
+                type: 'string',
+                enum: [
+                  'cobertura_aluzinc',
+                  'placa_colaborante',
+                  'panel_poliestireno',
+                  'panel_poliuretano',
+                  'cobertura_upvc',
+                  'cobertura_policarbonato',
+                  'cobertura_fibra_vidrio',
+                  'accesorios_aluzinc'
+                ],
+                description: 'Tipo exacto usado en buscar_producto. Es obligatorio para aplicar las reglas comerciales de cada producto.'
+              },
               descripcion: {
                 type: 'string',
                 description: 'Descripción breve del producto, ej. "Cobertura Aluzinc TR4 0.40mm Verde Con Film".'
@@ -95,7 +109,7 @@ const tools = [
               },
               largo_m: {
                 type: 'number',
-                description: 'SOLO modo "planchas". Largo de cada plancha en metros.'
+                description: 'SOLO modo "planchas". Largo exacto de cada plancha en metros. Para cobertura_upvc solo se permite 3.90, 5.90 u 11.80; nunca usar 4 ni 6.'
               },
               area_m2: {
                 type: 'number',
@@ -110,7 +124,7 @@ const tools = [
                 description: 'Opcional. Campo PESO KG PROMEDIO COMERCIAL obtenido de buscar_producto, solo si el cliente pidió el peso total.'
               }
             },
-            required: ['modo', 'precio_unitario']
+            required: ['tipo_producto', 'modo', 'precio_unitario']
           }
         },
         moneda: {
