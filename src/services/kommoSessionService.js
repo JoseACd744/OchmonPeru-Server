@@ -8,6 +8,80 @@ const SESSION_TTL_MS = 48 * 60 * 60 * 1000; // 48 horas
 // el mismo browser en vez de lanzar uno cada una (causaba EAGAIN por falta de recursos)
 const pendingRefreshes = new Map();
 
+// "Failed to launch the browser process! ... Resource temporarily unavailable (11)"
+// es EAGAIN del SO al hacer fork/posix_spawn: casi siempre falta transitoria de
+// recursos (procesos/hilos del sistema al límite), no un fallo permanente. Se
+// puede autorecuperar reintentando con backoff.
+const LAUNCH_RETRY_DELAYS_MS = [3000, 8000, 15000];
+
+function isTransientLaunchError(error) {
+  const msg = error?.message || '';
+  return (
+    msg.includes('Failed to launch the browser process') ||
+    msg.includes('Resource temporarily unavailable') ||
+    msg.includes('EAGAIN') ||
+    msg.includes('spawn')
+  );
+}
+
+// Lanza Chrome con reintentos: si falla por falta de recursos (EAGAIN), espera
+// y reintenta en vez de tumbar el flujo que lo llamó.
+async function launchBrowserWithRetry() {
+  let lastError;
+  for (let attempt = 1; attempt <= LAUNCH_RETRY_DELAYS_MS.length + 1; attempt++) {
+    try {
+      return await puppeteer.launch({
+        headless: true,
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-gpu',
+          '--no-zygote',
+          '--disable-extensions',
+          '--disable-background-networking',
+          '--disable-default-apps',
+          '--disable-sync',
+          '--disable-translate',
+          '--mute-audio',
+          '--no-first-run',
+        ],
+      });
+    } catch (error) {
+      lastError = error;
+      const delay = LAUNCH_RETRY_DELAYS_MS[attempt - 1];
+      if (delay && isTransientLaunchError(error)) {
+        console.warn(
+          `[KommoSession] Fallo transitorio al lanzar Chrome (intento ${attempt}/${LAUNCH_RETRY_DELAYS_MS.length + 1}): ${error.message}. Reintentando en ${delay}ms...`
+        );
+        await new Promise(r => setTimeout(r, delay));
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw lastError;
+}
+
+// Cierra el browser con un límite de tiempo; si close() se cuelga, mata el
+// proceso directamente para no dejar procesos huérfanos consumiendo recursos
+// (causa típica de que el EAGAIN se repita cada vez más seguido).
+async function closeBrowserSafely(browser) {
+  try {
+    await Promise.race([
+      browser.close(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('browser.close() timeout')), 10000)),
+    ]);
+  } catch (error) {
+    console.warn('[KommoSession] browser.close() falló o se colgó, forzando kill del proceso:', error.message);
+    try {
+      browser.process()?.kill('SIGKILL');
+    } catch (_killError) {
+      // Ya no había proceso que matar; ignorar.
+    }
+  }
+}
+
 // Verifica si las cookies en DB son válidas (menos de 48h)
 async function isSessionValid(subdominio) {
   const record = await KommoSession.findOne({ where: { domain: subdominio } });
@@ -32,10 +106,7 @@ function refreshKommoSession(subdominio) {
 async function doRefreshKommoSession(subdominio) {
   console.log(`[KommoSession] Iniciando sesión en Kommo con Puppeteer (subdominio: ${subdominio})...`);
 
-  const browser = await puppeteer.launch({
-    headless: true,
-    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
-  });
+  const browser = await launchBrowserWithRetry();
 
   try {
     const page = await browser.newPage();
@@ -72,7 +143,7 @@ async function doRefreshKommoSession(subdominio) {
     console.log(`[KommoSession] Cookies guardadas en DB → session_id: ${sessionId.slice(0, 8)}...`);
     return { sessionId, csrfToken, cookieHeader };
   } finally {
-    await browser.close();
+    await closeBrowserSafely(browser);
   }
 }
 
