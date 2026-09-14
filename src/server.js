@@ -22,9 +22,16 @@ async function bootstrap() {
       console.log('Token OAuth de Kommo válido al iniciar servidor.');
     }
 
-    // 2) Inicializar sesión web de Kommo al arranque
-    await initializeKommoSession();
-    console.log('Sesión web de Kommo inicializada al iniciar servidor.');
+    // 2) Inicializar sesión web de Kommo al arranque.
+    // No es crítico para poder servir tráfico: si Puppeteer falla (p. ej. EAGAIN
+    // transitorio al lanzar Chrome), la sesión se reintentará on-demand en el
+    // primer uso (ver getKommoSessionCookies) en vez de tumbar todo el servidor.
+    try {
+      await initializeKommoSession();
+      console.log('Sesión web de Kommo inicializada al iniciar servidor.');
+    } catch (error) {
+      console.error('No se pudo inicializar la sesión web de Kommo al arrancar, se reintentará on-demand:', error);
+    }
 
     // 3) Configurar renovación periódica de token OAuth
     const refreshInterval = 22 * 60 * 60 * 1000; // 22 horas en milisegundos
