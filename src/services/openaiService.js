@@ -6,6 +6,7 @@ const { authenticate, readTokenFromDB } = require('./refreshTokenKommo');
 const { getKommoSessionFromDB, refreshKommoSession } = require('./kommoSessionService');
 const systemPrompt = require('../config/systemPrompt');
 const tools = require('../config/toolDefinitions');
+const { CatalogGuard, mentionsUnsupportedProduct, HANDOFF_MESSAGE } = require('../utils/catalogGuard');
 
 // Deshabilita keep-alive para evitar sockets reutilizados a medio cerrar,
 // una causa común de ERR_STREAM_PREMATURE_CLOSE contra la API de Kommo.
@@ -231,6 +232,14 @@ class OpenAIService {
       }
 
       let context = conversationId ? this.getConversationContext(conversationId) : null;
+      const catalogGuard = new CatalogGuard();
+      const pendingActions = [];
+      catalogGuard.quoted = context?.verifiedQuote === true;
+      // Impedir la generación y las acciones de cierre para productos no soportados.
+      if (mentionsUnsupportedProduct(msg_client) ||
+          mentionsUnsupportedProduct(JSON.stringify(context?.messages.slice(-2) || []))) {
+        return await this.catalogHandoff(conversationId, lead_id);
+      }
       let previousResponseId = null;
 
       const input = [];
@@ -286,7 +295,7 @@ class OpenAIService {
             console.log("ToolCall detectado:", toolCall.name);
             console.log("Argumentos procesados:", args);
 
-            const outputValue = await this.executeToolCall(toolCall.name, args, lead_id);
+            const outputValue = await this.executeToolCall(toolCall.name, args, lead_id, catalogGuard, pendingActions);
 
             toolOutputItems.push({
               type: 'function_call_output',
@@ -309,6 +318,15 @@ class OpenAIService {
 
         if (pendingToolCalls.length > 0) {
           console.warn(`Se alcanzó el máximo de ${MAX_TOOL_ROUNDS} rondas de tool calls sin obtener una respuesta final.`);
+          return await this.catalogHandoff(conversationId, lead_id);
+        }
+
+        if (!catalogGuard.validateResponse(this.extractTextFromResponse(response))) {
+          return await this.catalogHandoff(conversationId, lead_id);
+        }
+        // Los cierres comerciales solo se ejecutan después de validar el texto final.
+        for (const action of pendingActions) {
+          await this.executeToolCall(action.name, action.args, lead_id, catalogGuard);
         }
 
         // Actualizar contexto de la conversación
@@ -318,7 +336,8 @@ class OpenAIService {
             messages: [...(context?.messages || []),
               { role: 'user', content: msg_client },
               { role: 'assistant', content: this.extractTextFromResponse(response) }
-            ]
+            ],
+            verifiedQuote: catalogGuard.quoted
           });
         }
 
@@ -328,6 +347,9 @@ class OpenAIService {
 
       // Si no hay tool calls, retornar el texto directamente
       if (currentResponse) {
+        if (!catalogGuard.validateResponse(this.extractTextFromResponse(currentResponse))) {
+          return await this.catalogHandoff(conversationId, lead_id);
+        }
         // Actualizar contexto de la conversación
         if (conversationId) {
           this.updateConversationContext(conversationId, {
@@ -363,7 +385,25 @@ class OpenAIService {
   }
 
   // Ejecuta una tool call individual y retorna su output
-  async executeToolCall(toolName, args, lead_id) {
+  async catalogHandoff(conversationId, lead_id) {
+    // No conservar el response_id de una respuesta bloqueada: podría contaminar
+    // las próximas respuestas aunque el cliente solo diga "ok".
+    if (conversationId) this.updateConversationContext(conversationId, { messages: [], lastResponseId: null, verifiedQuote: false });
+    if (lead_id) await this.getInterest('ASESOR', lead_id);
+    return HANDOFF_MESSAGE;
+  }
+
+  async executeToolCall(toolName, args, lead_id, catalogGuard, pendingActions) {
+    if (['cotizado', 'finalizado'].includes(toolName) && catalogGuard?.blocked) {
+      return { success: false, message: 'Información no validada: deriva a un asesor, no cierres la cotización.' };
+    }
+    if (toolName === 'cotizado' && !catalogGuard?.quoted) {
+      return { success: false, message: 'No existe una cotización verificada para marcar como COTIZADO.' };
+    }
+    if (pendingActions && ['cotizado', 'finalizado'].includes(toolName)) {
+      if (!pendingActions.some(action => action.name === toolName)) pendingActions.push({ name: toolName, args });
+      return { success: true, message: 'Acción pendiente de validación de la respuesta final por el servidor.' };
+    }
     if (toolName === 'unknow_message') {
       const customer_message = args.customer_message;
       const action_id = args.action_id;
@@ -403,15 +443,15 @@ class OpenAIService {
     }
 
     if (toolName === 'buscar_producto') {
-      const { buscarProducto: buscarEnJSON } = require('../utils/buscarProducto');
       console.log('Buscando producto con args:', args);
-      return buscarEnJSON(args);
+      if (!catalogGuard) return { success: false, message: 'Falta el contexto de validación del catálogo.' };
+      return catalogGuard.search(args);
     }
 
     if (toolName === 'calcular_cotizacion') {
-      const { calcularCotizacion } = require('../utils/calcularCotizacion');
       console.log('Calculando cotización con args:', args);
-      return calcularCotizacion(args);
+      if (!catalogGuard) return { success: false, message: 'Falta el contexto de validación del catálogo.' };
+      return catalogGuard.quote(args);
     }
 
     console.warn(`Tool call desconocida: ${toolName}`);

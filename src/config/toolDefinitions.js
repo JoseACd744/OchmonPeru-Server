@@ -76,6 +76,10 @@ const tools = [
           items: {
             type: 'object',
             properties: {
+              producto_id: {
+                type: 'string',
+                description: 'ID exacto devuelto por buscar_producto en este turno. Obligatorio: el servidor obtiene y valida el precio desde ese registro.'
+              },
               tipo_producto: {
                 type: 'string',
                 enum: [
@@ -124,7 +128,7 @@ const tools = [
                 description: 'Opcional. Campo PESO KG PROMEDIO COMERCIAL obtenido de buscar_producto, solo si el cliente pidió el peso total.'
               }
             },
-            required: ['tipo_producto', 'modo', 'precio_unitario']
+            required: ['producto_id', 'tipo_producto', 'modo']
           }
         },
         moneda: {
