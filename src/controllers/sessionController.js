@@ -22,6 +22,11 @@ class SessionController {
       });
     } catch (error) {
       console.error('[SessionController] Error refrescando sesión de Kommo:', error);
+      if (error.code === 'KOMMO_BROWSER_RESOURCE_EXHAUSTED') {
+        const retryAfterSeconds = Math.max(1, Math.ceil(error.retryAfterMs / 1000));
+        res.set('Retry-After', String(retryAfterSeconds));
+        return res.status(503).json({ success: false, code: error.code, error: error.message, retryAfterSeconds });
+      }
       res.status(500).json({ success: false, error: error.message });
     }
   }

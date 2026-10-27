@@ -92,3 +92,47 @@ test('no ejecuta un cierre pendiente si el texto final resulta inventado', async
   assert.match(await instance.createResponse('Sí, con eso', null, 'lead_test'), /confirmar/);
   assert.deepEqual(instance.actions.map(a => a.action), ['ASESOR']);
 });
+
+test('fallo de Chrome se propaga sin crear template ni ejecutar el bot posterior', async () => {
+  const instance = service();
+  const error = new Error('Chrome sin recursos');
+  error.code = 'KOMMO_BROWSER_RESOURCE_EXHAUSTED';
+  instance.getKommoSessionCookies = async () => { throw error; };
+  let templates = 0;
+  let fixedBots = 0;
+  instance.createChatTemplate = async () => { templates++; };
+  instance.launchFixedSalesbot = () => { fixedBots++; };
+  await assert.rejects(instance.launchSalesbot(123, 'synthetic-token', 'test', 'Mensaje de prueba'), { code: error.code });
+  assert.equal(templates, 0);
+  assert.equal(fixedBots, 0);
+});
+
+test('fallo de ejecución se propaga, limpia recursos y no ejecuta el bot posterior', async () => {
+  const instance = service();
+  instance.getKommoSessionCookies = async () => ({ sessionId: 'fake', csrfToken: 'fake' });
+  instance.createChatTemplate = async () => 1;
+  instance.createSalesbotWithTemplate = async () => 2;
+  instance.executeSalesbot = async () => { throw new Error('no ejecutado'); };
+  const deleted = [];
+  instance.deleteSalesbotById = async () => { deleted.push('bot'); };
+  instance.deleteChatTemplate = async () => { deleted.push('template'); };
+  let fixedBots = 0;
+  instance.launchFixedSalesbot = () => { fixedBots++; };
+  await assert.rejects(instance.launchSalesbot(123, 'synthetic-token', 'test', 'Mensaje de prueba'), /no ejecutado/);
+  assert.deepEqual(deleted, ['bot', 'template']);
+  assert.equal(fixedBots, 0);
+});
+
+test('envío exitoso conserva la limpieza y ejecuta el bot posterior una sola vez', async () => {
+  const instance = service();
+  instance.getKommoSessionCookies = async () => ({ sessionId: 'fake', csrfToken: 'fake' });
+  instance.createChatTemplate = async () => 1;
+  instance.createSalesbotWithTemplate = async () => 2;
+  const events = [];
+  instance.executeSalesbot = async () => { events.push('send'); };
+  instance.deleteSalesbotById = async () => { events.push('delete bot'); };
+  instance.deleteChatTemplate = async () => { events.push('delete template'); };
+  instance.launchFixedSalesbot = () => { events.push('fixed bot'); };
+  await instance.launchSalesbot(123, 'synthetic-token', 'test', 'Mensaje de prueba');
+  assert.deepEqual(events, ['send', 'delete bot', 'delete template', 'fixed bot']);
+});

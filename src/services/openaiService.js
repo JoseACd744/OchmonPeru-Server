@@ -793,6 +793,7 @@ class OpenAIService {
     let templateId = null;
     let botId = null;
     let usedSessionRetry = false;
+    let messageDispatched = false;
     const MAX_CREATE_BOT_ATTEMPTS = 2;
 
     try {
@@ -829,6 +830,7 @@ class OpenAIService {
 
       // Paso 3: Ejecutar el bot en el lead
       await this.executeSalesbot(baseUrl, headersApi, botId, idLead);
+      messageDispatched = true;
 
       if (usedSessionRetry) {
         console.info('[KommoSession] Reintento de /ajax/v2/salesbot completado correctamente tras renovar la sesión.');
@@ -841,6 +843,8 @@ class OpenAIService {
 
     } catch (error) {
       console.error('Error en launchSalesbot:', error);
+      // El llamador debe enterarse y derivar a asesor, no registrar un envío exitoso.
+      throw error;
     } finally {
       // Limpieza: eliminar bot y template
       if (botId && headersAjax) {
@@ -858,8 +862,8 @@ class OpenAIService {
         }
       }
 
-      // Ejecutar bot fijo 102014 después de limpiar
-      this.launchFixedSalesbot(idLead, token, subdominio);
+      // No avanzar el flujo si no se confirmó la ejecución del bot de respuesta.
+      if (messageDispatched) this.launchFixedSalesbot(idLead, token, subdominio);
     }
   }
 
